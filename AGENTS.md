@@ -1,5 +1,6 @@
 # AGENTS
 
+- Specifications are described in `docs/spec/`
 - Favour simplicity in implementation where possible
 - Don't add additional dependencies / tools unless they're useful
 - Ask before adding any new dependencies / tools

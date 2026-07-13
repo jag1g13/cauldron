@@ -1,5 +1,8 @@
+from cauldron.cli import cli
+
+
 def main():
-    print("Hello from cauldron!")
+    cli()
 
 
 if __name__ == "__main__":
