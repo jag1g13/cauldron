@@ -9,4 +9,3 @@
 - Sign commits using an SSH key
 - When committing, list the current AI model as a co-author using format: "<harness> / <modelname>".
 - Keep README.md up to date automatically. Any time a change is made that affects setup steps or the command line interface, make sure the README stays in sync
-
