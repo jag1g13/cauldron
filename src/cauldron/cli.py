@@ -100,7 +100,16 @@ def up(name, build, no_build):
 @click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
 def stop(name):
     """Stop the project's container."""
-    raise NotImplementedError("stop is not yet implemented")
+    container = project.container_name(override=name)
+
+    if not podman.container_exists(container):
+        raise click.ClickException(f"Container '{container}' does not exist.")
+
+    click.echo(f"Stopping container {container}...")
+    if not podman.stop_container(container):
+        raise click.ClickException(f"Failed to stop container {container}.")
+
+    click.echo(f"Container {container} stopped.")
 
 
 @cli.command()
@@ -110,7 +119,22 @@ def stop(name):
 )
 def rm(name, force):
     """Remove the project's container."""
-    raise NotImplementedError("rm is not yet implemented")
+    container = project.container_name(override=name)
+
+    if not podman.container_exists(container):
+        raise click.ClickException(f"Container '{container}' does not exist.")
+
+    if podman.container_running(container) and not force:
+        raise click.ClickException(
+            f"Container '{container}' is running. "
+            "Stop it first or use --force to remove it."
+        )
+
+    click.echo(f"Removing container {container}...")
+    if not podman.remove_container(container, force=force):
+        raise click.ClickException(f"Failed to remove container {container}.")
+
+    click.echo(f"Container {container} removed.")
 
 
 @cli.command()
@@ -119,7 +143,25 @@ def rm(name, force):
 )
 def ps(all_containers):
     """List Cauldron-managed containers."""
-    raise NotImplementedError("ps is not yet implemented")
+    containers = podman.list_containers(all_containers=all_containers)
+
+    if not containers:
+        click.echo("No Cauldron containers.")
+        return
+
+    name_width = max(len(c["name"]) for c in containers)
+    image_width = max(len(c["image"]) for c in containers)
+    status_width = max(len(c["status"]) for c in containers)
+
+    header = f"{'NAME':<{name_width}}  {'IMAGE':<{image_width}}  {'STATUS':<{status_width}}  PROJECT"
+    click.echo(header)
+    for c in containers:
+        click.echo(
+            f"{c['name']:<{name_width}}  "
+            f"{c['image']:<{image_width}}  "
+            f"{c['status']:<{status_width}}  "
+            f"{c['project_dir']}"
+        )
 
 
 @cli.command(context_settings={"ignore_unknown_options": True})

@@ -177,3 +177,66 @@ def test_run_container_mounts_gitconfig_and_ssh_agent():
         assert "/home/deck/.gitconfig:/home/cauldron/.gitconfig:ro,Z" in args
         assert "/run/user/1000/keyring/ssh:/run/user/1000/keyring/ssh:ro" in args
         assert "SSH_AUTH_SOCK=/run/user/1000/keyring/ssh" in args
+
+
+def test_run_container_adds_project_label():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+        )
+        args = mock_run.call_args[0][0]
+        assert "--label" in args
+        assert "cauldron.project_dir=/home/deck/projects/foo" in args
+
+
+def test_stop_container_runs_podman_stop():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.stop_container("cauldron-foo") is True
+        mock_run.assert_called_once_with(["stop", "cauldron-foo"])
+
+
+def test_remove_container_runs_podman_rm():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.remove_container("cauldron-foo") is True
+        mock_run.assert_called_once_with(["rm", "cauldron-foo"])
+
+
+def test_remove_container_forces_when_requested():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.remove_container("cauldron-foo", force=True) is True
+        mock_run.assert_called_once_with(["rm", "-f", "cauldron-foo"])
+
+
+def test_list_containers_parses_podman_ps_json():
+    json_output = """[
+        {
+            "Names": ["cauldron-foo"],
+            "Image": "cauldron-foo:latest",
+            "State": "running",
+            "Labels": {"cauldron.project_dir": "/home/deck/projects/foo"}
+        }
+    ]"""
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json_output
+        containers = podman.list_containers()
+        assert len(containers) == 1
+        assert containers[0]["name"] == "cauldron-foo"
+        assert containers[0]["image"] == "cauldron-foo:latest"
+        assert containers[0]["status"] == "running"
+        assert containers[0]["project_dir"] == "/home/deck/projects/foo"
+
+
+def test_list_containers_returns_empty_on_failure():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 1
+        assert podman.list_containers() == []

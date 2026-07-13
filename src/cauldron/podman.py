@@ -1,10 +1,14 @@
+import json
 import pathlib
 import subprocess
 import tempfile
 
+from cauldron.project import DEFAULT_CONTAINER_PREFIX
+
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
 LOCAL_BASE_TAG = "cauldron-base:latest"
 CONTAINER_HOME = "/home/cauldron"
+PROJECT_LABEL = "cauldron.project_dir"
 
 
 def _run(args, **kwargs):
@@ -139,6 +143,8 @@ def run_container(
         "-d",
         "--name",
         name,
+        "--label",
+        f"{PROJECT_LABEL}={project_dir}",
         "--user",
         f"{uid}:{gid}",
         "--userns",
@@ -161,3 +167,57 @@ def run_container(
     args.append(image)
 
     return _run(args).returncode == 0
+
+
+def stop_container(name):
+    """Stop a running container. Returns True on success."""
+    return _run(["stop", name]).returncode == 0
+
+
+def remove_container(name, force=False):
+    """Remove a container. Returns True on success."""
+    args = ["rm"]
+    if force:
+        args.append("-f")
+    args.append(name)
+    return _run(args).returncode == 0
+
+
+def list_containers(all_containers=False):
+    """List Cauldron-managed containers.
+
+    Returns a list of dictionaries with keys: name, image, status, project_dir.
+    """
+    args = [
+        "ps",
+        "--format",
+        "json",
+        "--filter",
+        f"name=^{DEFAULT_CONTAINER_PREFIX}-",
+    ]
+    if all_containers:
+        args.append("--all")
+
+    result = _run(args)
+    if result.returncode != 0:
+        return []
+
+    try:
+        containers = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(containers, list):
+        containers = [containers]
+
+    return [
+        {
+            "name": c.get("Names", [c.get("Id", "")])[0]
+            if isinstance(c.get("Names"), list)
+            else c.get("Names", ""),
+            "image": c.get("Image", ""),
+            "status": c.get("State", c.get("Status", "")),
+            "project_dir": c.get("Labels", {}).get(PROJECT_LABEL, ""),
+        }
+        for c in containers
+    ]

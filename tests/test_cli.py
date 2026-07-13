@@ -142,3 +142,77 @@ def test_up_builds_intermediate_when_dockerfile_exists(
         assert result.exit_code == 0
         mock_build_image.assert_called_once()
         mock_project_build.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+def test_stop_fails_when_container_missing(mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["stop"])
+    assert result.exit_code != 0
+    assert "does not exist" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.stop_container", return_value=True)
+def test_stop_stops_container(mock_stop, mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["stop"])
+    assert result.exit_code == 0
+    assert "stopped" in result.output
+    mock_stop.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+def test_rm_fails_when_container_missing(mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["rm"])
+    assert result.exit_code != 0
+    assert "does not exist" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+def test_rm_fails_when_container_running_without_force(mock_running, mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["rm"])
+    assert result.exit_code != 0
+    assert "is running" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.remove_container", return_value=True)
+def test_rm_force_stops_and_removes(mock_remove, mock_running, mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["rm", "--force"])
+    assert result.exit_code == 0
+    assert "removed" in result.output
+    mock_remove.assert_called_once()
+    assert mock_remove.call_args.kwargs["force"] is True
+
+
+@patch("cauldron.podman.list_containers", return_value=[])
+def test_ps_shows_no_containers_message(mock_list):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ps"])
+    assert result.exit_code == 0
+    assert "No Cauldron containers" in result.output
+
+
+@patch(
+    "cauldron.podman.list_containers",
+    return_value=[
+        {
+            "name": "cauldron-foo",
+            "image": "cauldron-foo:latest",
+            "status": "running",
+            "project_dir": "/home/deck/projects/foo",
+        }
+    ],
+)
+def test_ps_lists_containers(mock_list):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ps"])
+    assert result.exit_code == 0
+    assert "cauldron-foo" in result.output
+    assert "/home/deck/projects/foo" in result.output
