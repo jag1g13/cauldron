@@ -204,6 +204,7 @@ def test_run_container_mounts_defaults():
         assert "keep-id" in args
         assert "--user" in args
         assert "1000:1000" in args
+        assert args[-2:] == ["sleep", "infinity"]
 
 
 def test_run_container_mounts_gitconfig_and_ssh_agent():

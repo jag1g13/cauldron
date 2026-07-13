@@ -213,6 +213,7 @@ def run_container(
         args.extend(["-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"])
 
     args.append(image)
+    args.extend(["sleep", "infinity"])
 
     return _run(args).returncode == 0
 
