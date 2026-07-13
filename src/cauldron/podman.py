@@ -1,7 +1,10 @@
+import pathlib
 import subprocess
+import tempfile
 
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
 LOCAL_BASE_TAG = "cauldron-base:latest"
+CONTAINER_HOME = "/home/cauldron"
 
 
 def _run(args, **kwargs):
@@ -55,3 +58,106 @@ def run_test_container():
         _run(["run", "--rm", LOCAL_BASE_TAG, "echo", "cauldron-check-ok"]).returncode
         == 0
     )
+
+
+def build_image(tag, dockerfile, context):
+    """Build an image from a Dockerfile and tag it.
+
+    Returns True on success.
+    """
+    result = _run(
+        [
+            "build",
+            "-t",
+            tag,
+            "-f",
+            str(dockerfile),
+            str(context),
+        ]
+    )
+    return result.returncode == 0
+
+
+def build_project_image(tag, uid, gid, intermediate_tag=None):
+    """Build the final project image with the host user configured.
+
+    If intermediate_tag is provided, it is used as the base image; otherwise
+    cauldron-base:latest is used. The resulting image creates a user matching
+    the host UID/GID and sets HOME to /home/cauldron.
+
+    Returns True on success.
+    """
+    base = intermediate_tag or LOCAL_BASE_TAG
+    dockerfile_content = f"""FROM {base}
+USER root
+RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron
+ENV HOME={CONTAINER_HOME}
+"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dockerfile = pathlib.Path(tmpdir) / "Dockerfile"
+        dockerfile.write_text(dockerfile_content)
+        return build_image(tag, dockerfile, tmpdir)
+
+
+def container_exists(name):
+    """Return True if a container with the given name exists."""
+    return _run(["container", "exists", name]).returncode == 0
+
+
+def container_running(name):
+    """Return True if the named container is running."""
+    result = _run(
+        [
+            "container",
+            "inspect",
+            "-f",
+            "{{.State.Running}}",
+            name,
+        ]
+    )
+    if result.returncode != 0:
+        return False
+    return result.stdout.strip().lower() == "true"
+
+
+def run_container(
+    name,
+    image,
+    workdir,
+    project_dir,
+    uid,
+    gid,
+    gitconfig=None,
+    ssh_auth_sock=None,
+):
+    """Create and start a detached container with the standard mounts.
+
+    Returns True on success.
+    """
+    args = [
+        "run",
+        "-d",
+        "--name",
+        name,
+        "--user",
+        f"{uid}:{gid}",
+        "--userns",
+        "keep-id",
+        "-w",
+        str(workdir),
+        "-v",
+        f"{project_dir}:{project_dir}:rw",
+    ]
+
+    args.extend(["-e", f"HOME={CONTAINER_HOME}"])
+
+    if gitconfig:
+        args.extend(["-v", f"{gitconfig}:{CONTAINER_HOME}/.gitconfig:ro,Z"])
+
+    if ssh_auth_sock:
+        args.extend(["-v", f"{ssh_auth_sock}:{ssh_auth_sock}:ro"])
+        args.extend(["-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"])
+
+    args.append(image)
+
+    return _run(args).returncode == 0

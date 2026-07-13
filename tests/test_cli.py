@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from click.testing import CliRunner
 
 from cauldron.cli import cli
@@ -48,3 +50,95 @@ def test_check_fails_when_podman_not_installed():
         assert "Check failed: podman is installed" in result.output
     finally:
         podman_module.version = original_version
+
+
+def test_up_rejects_conflicting_build_flags():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up", "--build", "--no-build"])
+    assert result.exit_code != 0
+    assert "cannot be used together" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+def test_up_fails_when_container_already_exists(mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up"])
+    assert result.exit_code != 0
+    assert "already exists" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=False)
+def test_up_no_build_fails_when_image_missing(mock_image, mock_container):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up", "--no-build"])
+    assert result.exit_code != 0
+    assert "missing" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=False)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_builds_and_starts_container_when_image_missing(
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_base,
+    mock_image,
+    mock_container,
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up"])
+    assert result.exit_code == 0
+    assert "is running" in result.output
+    mock_build.assert_called_once()
+    mock_run.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=True)
+@patch("cauldron.podman.build_project_image")
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_skips_build_when_image_exists(
+    mock_dockerfile, mock_running, mock_run, mock_build, mock_image, mock_container
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up"])
+    assert result.exit_code == 0
+    mock_build.assert_not_called()
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=True)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+def test_up_builds_intermediate_when_dockerfile_exists(
+    mock_running,
+    mock_run,
+    mock_project_build,
+    mock_build_image,
+    mock_base,
+    mock_image,
+    mock_container,
+    tmp_path,
+):
+    dockerfile = tmp_path / ".cauldron" / "Dockerfile"
+    dockerfile.parent.mkdir(parents=True)
+    dockerfile.write_text("FROM cauldron-base\nRUN echo hi\n")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up", "--build"])
+        assert result.exit_code == 0
+        mock_build_image.assert_called_once()
+        mock_project_build.assert_called_once()

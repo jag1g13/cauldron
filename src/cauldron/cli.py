@@ -1,6 +1,6 @@
 import click
 
-from cauldron import podman
+from cauldron import podman, project
 
 
 @click.group(invoke_without_command=True)
@@ -40,7 +40,60 @@ def check():
 )
 def up(name, build, no_build):
     """Build if necessary and start the project's container."""
-    raise NotImplementedError("up is not yet implemented")
+    if build and no_build:
+        raise click.ClickException("--build and --no-build cannot be used together.")
+
+    container = project.container_name(override=name)
+    image = project.project_image_name()
+    project_dir = project.project_dir()
+    uid, gid = project.host_user()
+
+    if podman.container_exists(container):
+        raise click.ClickException(
+            f"Container '{container}' already exists. "
+            "Remove it with 'cauldron rm' before running 'up'."
+        )
+
+    if no_build:
+        if not podman.image_exists(image):
+            raise click.ClickException(
+                f"Image '{image}' is missing and --no-build was specified."
+            )
+    elif build or not podman.image_exists(image):
+        click.echo("Building project image...")
+        if not podman.ensure_base_image():
+            raise click.ClickException("Failed to ensure base image.")
+
+        dockerfile = project.find_dockerfile()
+        intermediate = None
+        if dockerfile:
+            intermediate = f"{image.split(':')[0]}-intermediate:latest"
+            click.echo(f"Building intermediate image from {dockerfile}...")
+            if not podman.build_image(intermediate, dockerfile, dockerfile.parent):
+                raise click.ClickException(
+                    f"Failed to build intermediate image from {dockerfile}."
+                )
+
+        if not podman.build_project_image(image, uid, gid, intermediate):
+            raise click.ClickException("Failed to build project image.")
+
+    click.echo(f"Starting container {container}...")
+    if not podman.run_container(
+        name=container,
+        image=image,
+        workdir=project_dir,
+        project_dir=project_dir,
+        uid=uid,
+        gid=gid,
+        gitconfig=project.gitconfig_path(),
+        ssh_auth_sock=project.ssh_auth_sock(),
+    ):
+        raise click.ClickException(f"Failed to start container {container}.")
+
+    if not podman.container_running(container):
+        raise click.ClickException(f"Container {container} did not start.")
+
+    click.echo(f"Container {container} is running.")
 
 
 @cli.command()
