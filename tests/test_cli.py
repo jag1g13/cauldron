@@ -65,7 +65,8 @@ def test_check_fails_when_podman_not_installed():
         podman_module.version = original_version
 
 
-def test_up_rejects_conflicting_build_flags():
+@patch("cauldron.podman.container_exists", return_value=False)
+def test_up_rejects_conflicting_build_flags(mock_exists):
     runner = CliRunner()
     result = runner.invoke(cli, ["up", "--build", "--no-build"])
     assert result.exit_code != 0
@@ -229,3 +230,65 @@ def test_ps_lists_containers(mock_list):
     assert result.exit_code == 0
     assert "cauldron-foo" in result.output
     assert "/home/deck/projects/foo" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=0)
+def test_exec_runs_command_in_running_container(mock_exec, mock_running, mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["exec", "ls", "-la"])
+    assert result.exit_code == 0
+    mock_exec.assert_called_once()
+    args, kwargs = mock_exec.call_args
+    assert args[1] == "ls"
+    assert kwargs["args"] == ("-la",)
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=0)
+@patch.dict("os.environ", {"SHELL": "/bin/zsh"})
+def test_exec_opens_default_shell_when_no_command(mock_exec, mock_running, mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["exec"])
+    assert result.exit_code == 0
+    args, kwargs = mock_exec.call_args
+    assert args[1] == "/bin/zsh"
+    assert kwargs["interactive"] is True
+    assert kwargs["tty"] is True
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=0)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_exec_auto_starts_container_when_not_exists(
+    mock_dockerfile,
+    mock_exec,
+    mock_running,
+    mock_run,
+    mock_image,
+    mock_exists,
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["exec", "whoami"])
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    mock_exec.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", side_effect=[False, True])
+@patch("cauldron.podman.start_container", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=0)
+def test_exec_starts_container_when_stopped(
+    mock_exec, mock_start, mock_running, mock_exists
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["exec", "pwd"])
+    assert result.exit_code == 0
+    mock_start.assert_called_once()
+    mock_exec.assert_called_once()

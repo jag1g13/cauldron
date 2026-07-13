@@ -241,6 +241,13 @@ def test_run_container_adds_project_label():
         assert "cauldron.project_dir=/home/deck/projects/foo" in args
 
 
+def test_start_container_runs_podman_start():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.start_container("cauldron-foo") is True
+        mock_run.assert_called_once_with(["start", "cauldron-foo"])
+
+
 def test_stop_container_runs_podman_stop():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
@@ -260,6 +267,29 @@ def test_remove_container_forces_when_requested():
         mock_run.return_value.returncode = 0
         assert podman.remove_container("cauldron-foo", force=True) is True
         mock_run.assert_called_once_with(["rm", "-f", "cauldron-foo"])
+
+
+def test_exec_in_container_runs_command():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.exec_in_container("cauldron-foo", "ls", ["-la"]) == 0
+        mock_run.assert_called_once_with(
+            ["podman", "exec", "cauldron-foo", "ls", "-la"]
+        )
+
+
+def test_exec_in_container_uses_interactive_and_tty():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.exec_in_container("cauldron-foo", "bash", interactive=True, tty=True)
+        mock_run.assert_called_once_with(
+            ["podman", "exec", "-i", "-t", "cauldron-foo", "bash"]
+        )
+
+
+def test_exec_in_container_returns_podman_not_found():
+    with patch("subprocess.run", side_effect=FileNotFoundError()):
+        assert podman.exec_in_container("cauldron-foo", "ls") == 1
 
 
 def test_list_containers_parses_podman_ps_json():

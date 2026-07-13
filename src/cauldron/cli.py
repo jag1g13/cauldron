@@ -1,3 +1,5 @@
+import os
+
 import click
 
 from cauldron import podman, project
@@ -36,27 +38,30 @@ def check():
     click.echo("All checks passed.")
 
 
-@cli.command()
-@click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
-@click.option("--build", is_flag=True, help="Force a rebuild of the project image.")
-@click.option(
-    "--no-build", is_flag=True, help="Never build; fail if the image is missing."
-)
-def up(name, build, no_build):
-    """Build if necessary and start the project's container."""
+def _start_project_container(container, build=False, no_build=False):
+    """Ensure the project's container exists and is running.
+
+    If the container already exists and is stopped, it is started. If it does
+    not exist, the image is built (subject to build/no_build flags) and a new
+    container is created and started.
+    """
     if build and no_build:
         raise click.ClickException("--build and --no-build cannot be used together.")
 
-    container = project.container_name(override=name)
     image = project.project_image_name()
     project_dir = project.project_dir()
     uid, gid = project.host_user()
 
     if podman.container_exists(container):
-        raise click.ClickException(
-            f"Container '{container}' already exists. "
-            "Remove it with 'cauldron rm' before running 'up'."
-        )
+        if podman.container_running(container):
+            return
+        click.echo(f"Starting existing container {container}...")
+        if not podman.start_container(container):
+            raise click.ClickException(f"Failed to start container {container}.")
+        if not podman.container_running(container):
+            raise click.ClickException(f"Container {container} did not start.")
+        click.echo(f"Container {container} is running.")
+        return
 
     if no_build:
         if not podman.image_exists(image):
@@ -98,6 +103,25 @@ def up(name, build, no_build):
         raise click.ClickException(f"Container {container} did not start.")
 
     click.echo(f"Container {container} is running.")
+
+
+@cli.command()
+@click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
+@click.option("--build", is_flag=True, help="Force a rebuild of the project image.")
+@click.option(
+    "--no-build", is_flag=True, help="Never build; fail if the image is missing."
+)
+def up(name, build, no_build):
+    """Build if necessary and start the project's container."""
+    container = project.container_name(override=name)
+
+    if podman.container_exists(container):
+        raise click.ClickException(
+            f"Container '{container}' already exists. "
+            "Remove it with 'cauldron rm' before running 'up'."
+        )
+
+    _start_project_container(container, build=build, no_build=no_build)
 
 
 @cli.command()
@@ -168,13 +192,23 @@ def ps(all_containers):
         )
 
 
-@cli.command(context_settings={"ignore_unknown_options": True})
+@cli.command("exec", context_settings={"ignore_unknown_options": True})
 @click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
 @click.argument("command", required=False, default=None)
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def exec(name, command, args):
-    """Run a command or open a shell in the project's container."""
-    raise NotImplementedError("exec is not yet implemented")
+def exec_command(name, command, args):
+    """Run a command or open a shell in the project's container.
+
+    If the container is not running, it is started first.
+    """
+    container = project.container_name(override=name)
+    _start_project_container(container)
+
+    if command is None:
+        shell = os.environ.get("SHELL", "/bin/bash")
+        return podman.exec_in_container(container, shell, interactive=True, tty=True)
+
+    return podman.exec_in_container(container, command, args=args)
 
 
 @cli.command()

@@ -217,9 +217,35 @@ def run_container(
     return _run(args).returncode == 0
 
 
+def start_container(name):
+    """Start a stopped container. Returns True on success."""
+    return _run(["start", name]).returncode == 0
+
+
 def stop_container(name):
     """Stop a running container. Returns True on success."""
     return _run(["stop", name]).returncode == 0
+
+
+def exec_in_container(name, command, args=None, interactive=False, tty=False):
+    """Run a command inside a container, attaching stdio to the terminal.
+
+    Returns the command's exit code.
+    """
+    cmd = ["podman", "exec"]
+    if interactive:
+        cmd.append("-i")
+    if tty:
+        cmd.append("-t")
+    cmd.append(name)
+    cmd.append(command)
+    if args:
+        cmd.extend(args)
+
+    try:
+        return subprocess.run(cmd).returncode
+    except FileNotFoundError:
+        return 1
 
 
 def remove_container(name, force=False):
