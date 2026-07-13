@@ -1,0 +1,7 @@
+# Runtime
+__pycache__/
+*.py[codz]
+
+# Packaging
+*.egg-info/
+

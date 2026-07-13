@@ -1,0 +1,20 @@
+[project]
+name = "cauldron"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.4.2",
+    "podman>=5.8.0",
+]
+
+[project.scripts]
+cauldron = "cauldron.__main__:main"
+
+[dependency-groups]
+dev = [
+    "prek>=0.4.9",
+    "pytest>=9.1.1",
+    "ruff>=0.15.21",
+]
