@@ -13,6 +13,19 @@ def test_cli_without_command_prints_help():
     assert "check" in result.output
 
 
+def test_verbose_flag_enables_podman_verbose():
+    runner = CliRunner()
+    import cauldron.podman as podman_module
+
+    original_verbose = podman_module._verbose
+    try:
+        result = runner.invoke(cli, ["--verbose"])
+        assert result.exit_code == 0
+        assert podman_module._verbose is True
+    finally:
+        podman_module._verbose = original_verbose
+
+
 def test_check_succeeds_when_all_steps_pass():
     runner = CliRunner()
     with runner.isolated_filesystem():

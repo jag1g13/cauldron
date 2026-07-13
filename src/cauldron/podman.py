@@ -1,7 +1,9 @@
 import json
 import pathlib
 import subprocess
+import sys
 import tempfile
+import threading
 
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
@@ -10,20 +12,66 @@ LOCAL_BASE_TAG = "cauldron-base:latest"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
 
+_verbose = False
+
+
+def set_verbose(verbose):
+    """Enable or disable verbose mode for podman subcommands."""
+    global _verbose
+    _verbose = verbose
+
+
+def _stream_pipe(pipe, lines, file):
+    """Read lines from a pipe, append to lines, and print to file."""
+    for line in iter(pipe.readline, ""):
+        lines.append(line)
+        print(line, end="", file=file)
+    pipe.close()
+
 
 def _run(args, **kwargs):
     """Run a podman subcommand and return the CompletedProcess.
 
     Returns a CompletedProcess with a non-zero returncode if podman is not
-    installed or the command fails.
+    installed or the command fails. In verbose mode, stdout and stderr are
+    streamed to the terminal in real time while still being captured.
     """
+    command = ["podman", *args]
     try:
-        return subprocess.run(
-            ["podman", *args], capture_output=True, text=True, **kwargs
-        )
+        if _verbose:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                **kwargs,
+            )
+            stdout_lines = []
+            stderr_lines = []
+            stdout_thread = threading.Thread(
+                target=_stream_pipe,
+                args=(process.stdout, stdout_lines, sys.stdout),
+            )
+            stderr_thread = threading.Thread(
+                target=_stream_pipe,
+                args=(process.stderr, stderr_lines, sys.stderr),
+            )
+            stdout_thread.start()
+            stderr_thread.start()
+            returncode = process.wait()
+            stdout_thread.join()
+            stderr_thread.join()
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=returncode,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+            )
+
+        return subprocess.run(command, capture_output=True, text=True, **kwargs)
     except FileNotFoundError:
         return subprocess.CompletedProcess(
-            args=args, returncode=1, stdout="", stderr="podman not found"
+            args=command, returncode=1, stdout="", stderr="podman not found"
         )
 
 

@@ -1,6 +1,52 @@
-from unittest.mock import patch
+import subprocess
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cauldron import podman
+
+
+@pytest.fixture(autouse=True)
+def reset_verbose():
+    podman.set_verbose(False)
+    yield
+    podman.set_verbose(False)
+
+
+def test_set_verbose_changes_flag():
+    podman.set_verbose(True)
+    assert podman._verbose is True
+    podman.set_verbose(False)
+    assert podman._verbose is False
+
+
+def test_run_uses_subprocess_run_when_not_verbose():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman._run(["version"])
+        mock_run.assert_called_once_with(
+            ["podman", "version"], capture_output=True, text=True
+        )
+
+
+def test_run_uses_popen_when_verbose():
+    podman.set_verbose(True)
+    mock_process = MagicMock()
+    mock_process.wait.return_value = 0
+    mock_process.stdout = MagicMock()
+    mock_process.stdout.readline = MagicMock(return_value="")
+    mock_process.stderr = MagicMock()
+    mock_process.stderr.readline = MagicMock(return_value="")
+
+    with patch("subprocess.Popen", return_value=mock_process) as mock_popen:
+        result = podman._run(["version"])
+        mock_popen.assert_called_once_with(
+            ["podman", "version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        assert result.returncode == 0
 
 
 def test_run_returns_completed_process_on_success():

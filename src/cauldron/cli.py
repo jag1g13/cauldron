@@ -5,9 +5,13 @@ from cauldron import podman, project
 
 @click.group(invoke_without_command=True)
 @click.version_option()
+@click.option("--verbose", "-v", is_flag=True, help="Show Podman output in real time.")
 @click.pass_context
-def cli(ctx):
+def cli(ctx, verbose):
     """Cauldron — containerised development environments with rootless Podman."""
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
+    podman.set_verbose(verbose)
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
