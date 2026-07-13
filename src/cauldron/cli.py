@@ -1,4 +1,5 @@
 import os
+import sys
 
 import click
 
@@ -36,6 +37,11 @@ def check():
             raise click.ClickException(f"Check failed: {description}")
 
     click.echo("All checks passed.")
+
+
+def _tty_flags():
+    """Return (interactive, tty) based on the current stdin/stdout."""
+    return sys.stdin.isatty(), sys.stdout.isatty()
 
 
 def _start_project_container(container, build=False, no_build=False):
@@ -204,11 +210,15 @@ def exec_command(name, command, args):
     container = project.container_name(override=name)
     _start_project_container(container)
 
-    if command is None:
-        shell = os.environ.get("SHELL", "/bin/bash")
-        return podman.exec_in_container(container, shell, interactive=True, tty=True)
+    interactive, tty = _tty_flags()
 
-    return podman.exec_in_container(container, command, args=args)
+    if command is None:
+        command = os.environ.get("SHELL", "/bin/bash")
+        args = ()
+
+    return podman.exec_in_container(
+        container, command, args=args, interactive=interactive, tty=tty
+    )
 
 
 @cli.command()

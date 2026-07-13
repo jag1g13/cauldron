@@ -232,6 +232,22 @@ def test_ps_lists_containers(mock_list):
     assert "/home/deck/projects/foo" in result.output
 
 
+@patch("sys.stdin.isatty", return_value=True)
+@patch("sys.stdout.isatty", return_value=True)
+def test_tty_flags_detects_interactive_terminal(mock_stdout_tty, mock_stdin_tty):
+    from cauldron.cli import _tty_flags
+
+    assert _tty_flags() == (True, True)
+
+
+@patch("sys.stdin.isatty", return_value=False)
+@patch("sys.stdout.isatty", return_value=False)
+def test_tty_flags_detects_non_interactive(mock_stdout_tty, mock_stdin_tty):
+    from cauldron.cli import _tty_flags
+
+    assert _tty_flags() == (False, False)
+
+
 @patch("cauldron.podman.container_exists", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.podman.exec_in_container", return_value=0)
@@ -255,8 +271,6 @@ def test_exec_opens_default_shell_when_no_command(mock_exec, mock_running, mock_
     assert result.exit_code == 0
     args, kwargs = mock_exec.call_args
     assert args[1] == "/bin/zsh"
-    assert kwargs["interactive"] is True
-    assert kwargs["tty"] is True
 
 
 @patch("cauldron.podman.container_exists", return_value=False)
