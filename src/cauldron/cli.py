@@ -3,7 +3,7 @@ import sys
 
 import click
 
-from cauldron import podman, project, vscode
+from cauldron import config, podman, project, vscode
 
 
 @click.group(invoke_without_command=True)
@@ -124,6 +124,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             raise click.ClickException("Failed to build project image.")
 
     click.echo(f"Starting container {container}...")
+    container_env = config.container_env(config.load_config(project_dir))
     if not podman.run_container(
         name=container,
         image=image,
@@ -133,6 +134,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         gid=gid,
         gitconfig=project.gitconfig_path(),
         ssh_auth_sock=project.ssh_auth_sock(),
+        env=container_env,
     ):
         raise click.ClickException(f"Failed to start container {container}.")
 

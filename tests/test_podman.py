@@ -181,6 +181,73 @@ def test_container_running_returns_false_when_not_running():
         assert podman.container_running("cauldron-foo") is False
 
 
+def test_image_env_parses_inspect_output():
+    json_output = '["PATH=/usr/bin:/bin","FOO=bar"]'
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = json_output
+        assert podman.image_env("cauldron-foo:latest") == {
+            "PATH": "/usr/bin:/bin",
+            "FOO": "bar",
+        }
+        mock_run.assert_called_once_with(
+            [
+                "image",
+                "inspect",
+                "cauldron-foo:latest",
+                "--format",
+                "{{json .Config.Env}}",
+            ]
+        )
+
+
+def test_image_env_returns_empty_on_failure():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 1
+        assert podman.image_env("cauldron-foo:latest") == {}
+
+
+def test_run_container_passes_env_vars():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            env={"EDITOR": "vim", "FOO": "bar"},
+        )
+        args = mock_run.call_args[0][0]
+        assert "EDITOR=vim" in args
+        assert "FOO=bar" in args
+
+
+def test_run_container_expands_path_placeholder():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+
+        def inspect_side_effect(args):
+            result = MagicMock()
+            result.returncode = 0
+            result.stdout = '["PATH=/usr/bin:/bin"]'
+            return result
+
+        mock_run.side_effect = inspect_side_effect
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            env={"PATH": "/extra/bin:${PATH}"},
+        )
+        args = mock_run.call_args[0][0]
+        assert "PATH=/extra/bin:/usr/bin:/bin" in args
+
+
 def test_run_container_mounts_defaults():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0

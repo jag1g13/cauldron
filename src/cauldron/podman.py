@@ -95,6 +95,28 @@ def image_exists(image):
     return _run(["image", "exists", image]).returncode == 0
 
 
+def image_env(image):
+    """Return environment variables defined in an image's config.
+
+    Returns a dict mapping variable names to values.
+    """
+    result = _run(["image", "inspect", image, "--format", "{{json .Config.Env}}"])
+    if result.returncode != 0:
+        return {}
+
+    try:
+        env_list = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return {}
+
+    env = {}
+    for item in env_list:
+        if isinstance(item, str) and "=" in item:
+            key, value = item.split("=", 1)
+            env[key] = value
+    return env
+
+
 def ensure_base_image():
     """Ensure cauldron-base:latest exists, pulling and tagging if necessary."""
     if image_exists(LOCAL_BASE_TAG):
@@ -181,8 +203,12 @@ def run_container(
     gid,
     gitconfig=None,
     ssh_auth_sock=None,
+    env=None,
 ):
     """Create and start a detached container with the standard mounts.
+
+    The optional ``env`` dict sets extra environment variables. If a PATH
+    value contains ``${PATH}``, it is expanded with the image's default PATH.
 
     Returns True on success.
     """
@@ -211,6 +237,14 @@ def run_container(
     if ssh_auth_sock:
         args.extend(["-v", f"{ssh_auth_sock}:{ssh_auth_sock}:ro"])
         args.extend(["-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"])
+
+    env = env or {}
+    if "PATH" in env and "${PATH}" in env["PATH"]:
+        image_path = image_env(image).get("PATH", "")
+        env["PATH"] = env["PATH"].replace("${PATH}", image_path)
+
+    for key, value in env.items():
+        args.extend(["-e", f"{key}={value}"])
 
     args.append(image)
     args.extend(["sleep", "infinity"])

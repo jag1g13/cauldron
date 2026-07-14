@@ -77,7 +77,19 @@ Configuration is optional. When present, files are merged with the project file 
 - Global config: `~/.config/cauldron/cauldron.toml`
 - Project config: `.cauldron/cauldron.toml`
 
-The exact set of supported options will evolve; the CLI reference is the authoritative source once implemented.
+### Environment variables
+
+The `[env]` table sets environment variables inside the container. This is useful for customising the `PATH` of the `cauldron` user or passing other settings without editing a Dockerfile.
+
+```toml
+[env]
+PATH = "/home/cauldron/.opencode/bin:${PATH}"
+EDITOR = "vim"
+```
+
+`PATH` values may use `${PATH}` as a placeholder; Cauldron expands it to the image's default `PATH` when starting the container. Other variables are passed through as literal strings.
+
+Project env values override global env values at the key level.
 
 ## Platform support
 

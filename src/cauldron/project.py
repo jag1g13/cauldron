@@ -5,6 +5,8 @@ import pathlib
 DEFAULT_CONTAINER_PREFIX = "cauldron"
 DOCKERFILE_PROJECT_PATH = pathlib.Path(".cauldron") / "Dockerfile"
 DOCKERFILE_GLOBAL_PATH = pathlib.Path.home() / ".config" / "cauldron" / "Dockerfile"
+CONFIG_PROJECT_PATH = pathlib.Path(".cauldron") / "cauldron.toml"
+CONFIG_GLOBAL_PATH = pathlib.Path.home() / ".config" / "cauldron" / "cauldron.toml"
 
 
 def container_name(project_dir=None, override=None):
