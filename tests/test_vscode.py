@@ -1,3 +1,4 @@
+import pathlib
 from unittest.mock import patch
 
 from cauldron import vscode
@@ -23,6 +24,13 @@ def test_build_remote_uri_encodes_container_name():
 def test_build_remote_uri_encodes_special_characters():
     uri = vscode.build_remote_uri("cauldron_foo", "/home/deck/projects/foo bar")
     assert "foo%20bar" in uri
+
+
+def test_build_remote_uri_accepts_path_objects():
+    uri = vscode.build_remote_uri(
+        "cauldron-foo", pathlib.Path("/home/deck/projects/foo")
+    )
+    assert "/home/deck/projects/foo" in uri
 
 
 def test_open_in_code_runs_code_cli():
