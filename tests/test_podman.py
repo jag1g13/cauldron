@@ -404,6 +404,104 @@ def test_run_container_adds_project_label():
         assert "cauldron.project_dir=/home/deck/projects/foo" in args
 
 
+def test_run_container_mounts_extra_volumes():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            mounts=[
+                {"source": "/host/extra", "target": "/extra", "options": "ro"},
+                {"source": "/host/cache", "target": "/cache"},
+            ],
+        )
+        args = mock_run.call_args[0][0]
+        assert "/host/extra:/extra:ro" in args
+        assert "/host/cache:/cache" in args
+
+
+def test_run_container_publishes_ports():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            ports=["8080:8080", "127.0.0.1:3000:3000"],
+        )
+        args = mock_run.call_args[0][0]
+        assert "-p" in args
+        assert "8080:8080" in args
+        assert "127.0.0.1:3000:3000" in args
+
+
+def test_run_container_warns_when_selinux_enabled_and_no_label():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        with patch("cauldron.podman._selinux_enabled", return_value=True):
+            with pytest.warns(UserWarning, match="SELinux relabel option"):
+                podman.run_container(
+                    name="cauldron-foo",
+                    image="cauldron-foo:latest",
+                    workdir="/home/deck/projects/foo",
+                    project_dir="/home/deck/projects/foo",
+                    uid="1000",
+                    gid="1000",
+                    mounts=[
+                        {"source": "/host/extra", "target": "/extra", "options": "ro"},
+                    ],
+                )
+
+
+def test_run_container_does_not_warn_when_selinux_label_present():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        with patch("cauldron.podman._selinux_enabled", return_value=True):
+            with patch("warnings.warn") as mock_warn:
+                podman.run_container(
+                    name="cauldron-foo",
+                    image="cauldron-foo:latest",
+                    workdir="/home/deck/projects/foo",
+                    project_dir="/home/deck/projects/foo",
+                    uid="1000",
+                    gid="1000",
+                    mounts=[
+                        {
+                            "source": "/host/extra",
+                            "target": "/extra",
+                            "options": "ro,Z",
+                        },
+                    ],
+                )
+                mock_warn.assert_not_called()
+
+
+def test_run_container_does_not_warn_when_selinux_disabled():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        with patch("cauldron.podman._selinux_enabled", return_value=False):
+            with patch("warnings.warn") as mock_warn:
+                podman.run_container(
+                    name="cauldron-foo",
+                    image="cauldron-foo:latest",
+                    workdir="/home/deck/projects/foo",
+                    project_dir="/home/deck/projects/foo",
+                    uid="1000",
+                    gid="1000",
+                    mounts=[
+                        {"source": "/host/extra", "target": "/extra", "options": "ro"},
+                    ],
+                )
+                mock_warn.assert_not_called()
+
+
 def test_start_container_runs_podman_start():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0

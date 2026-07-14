@@ -50,12 +50,18 @@ FROM ${CAULDRON_BASE}
 
 CONFIG_TEMPLATE = """# Cauldron project configuration.
 #
-# Use the [container] table to customise the container image.
+# Use the [container] table to customise the container image, mounts, and ports.
 # Use the [env] table to set environment variables inside the container.
 # PATH values may use ${PATH} as a placeholder for the image's default PATH.
 
 [container]
 # base_image = "astral/uv:python3.14-trixie"
+# mounts = [
+#   {source = "/host/path", target = "/container/path", options = "ro,Z"},
+# ]
+# ports = [
+#   "8080:8080",
+# ]
 
 [env]
 # PATH = "/home/cauldron/.local/bin:${PATH}"
@@ -194,6 +200,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         gitconfig=project.gitconfig_path(),
         ssh_auth_sock=project.ssh_auth_sock(),
         env=container_env,
+        mounts=config.container_mounts(cfg),
+        ports=config.container_ports(cfg),
     ):
         raise click.ClickException(f"Failed to start container {container}.")
 

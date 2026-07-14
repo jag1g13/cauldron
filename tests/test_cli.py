@@ -471,7 +471,10 @@ def test_init_creates_cauldron_directory_and_templates():
 
         config_file = pathlib.Path(".cauldron/cauldron.toml")
         assert config_file.exists()
-        assert "[env]" in config_file.read_text()
+        content = config_file.read_text()
+        assert "[env]" in content
+        assert "mounts" in content
+        assert "ports" in content
 
 
 def test_init_keeps_existing_files():

@@ -60,6 +60,34 @@ EDITOR = "vim"
 
 `${PATH}` is expanded to the image's default `PATH` when the container starts.
 
+### Mounts
+
+Use the `[container]` table to mount additional files or directories into the container. Each mount needs a `source`, `target`, and optional `options`. You can also use Docker's short syntax: `"/host/path:/container/path:ro,Z"`.
+
+```toml
+[container]
+mounts = [
+  {source = "/home/deck/.aws", target = "/home/cauldron/.aws", options = "ro"},
+  {source = "/var/cache", target = "/cache", options = "rw"},
+]
+```
+
+Project mounts override global mounts when they share the same `target`. If SELinux is enabled on the host and a mount does not include the `z` or `Z` option, Cauldron warns you so you can add it.
+
+### Ports
+
+Use the `[container]` table to publish ports from the container to the host.
+
+```toml
+[container]
+ports = [
+  "8080:8080",
+  "127.0.0.1:3000:3000",
+]
+```
+
+Project ports override global ports when they refer to the same host port.
+
 ## Documentation
 
 - [Architecture and design](docs/spec/overview.md)

@@ -102,6 +102,34 @@ base_image = "astral/uv:python3.14-trixie"
 
 The configured image is passed to the build as the `CAULDRON_BASE` build argument. Project values override global values.
 
+### Mounts
+
+The `[container]` table can also declare extra mounts. Mounts may be written as inline tables with `source`, `target`, and optional `options`, or as Docker short-syntax strings such as `"/host:/container:ro,Z"`.
+
+```toml
+[container]
+mounts = [
+  {source = "/home/deck/.aws", target = "/home/cauldron/.aws", options = "ro"},
+  "/var/cache:/cache:rw",
+]
+```
+
+Global and project mounts are merged by `target`. A project mount with the same target as a global mount replaces the global one, and a warning is emitted. If SELinux is enabled on the host, Cauldron warns when a mount's options do not include the `z` or `Z` relabel option.
+
+### Ports
+
+The `[container]` table can publish container ports to the host.
+
+```toml
+[container]
+ports = [
+  "8080:8080",
+  "127.0.0.1:3000:3000",
+]
+```
+
+Global and project ports are merged by host port. A project port that maps the same host port as a global port replaces the global one, and a warning is emitted.
+
 ## Platform support
 
 - **Linux**: primary target; rootless Podman is expected to be installed and configured.

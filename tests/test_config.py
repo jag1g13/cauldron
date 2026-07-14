@@ -93,3 +93,139 @@ def test_container_env_converts_non_strings():
 
 def test_container_env_returns_empty_without_env_section():
     assert config.container_env({}) == {}
+
+
+def test_load_config_merges_container_mounts_by_target(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+mounts = [
+  {source = "/global/src", target = "/shared", options = "ro"},
+  {source = "/global/only", target = "/global-only", options = "ro"},
+]
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+mounts = [
+  {source = "/project/src", target = "/shared", options = "rw"},
+]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir, warn=lambda _msg: None)
+
+    mounts = loaded["container"]["mounts"]
+    by_target = {m["target"]: m for m in mounts}
+    assert by_target["/shared"]["source"] == "/project/src"
+    assert by_target["/shared"]["options"] == "rw"
+    assert by_target["/global-only"]["source"] == "/global/only"
+
+
+def test_load_config_warns_on_mount_target_overlap(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+mounts = [
+  {source = "/global/src", target = "/shared", options = "ro"},
+]
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+mounts = [
+  {source = "/project/src", target = "/shared", options = "rw"},
+]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+
+    warnings = []
+    config.load_config(project_dir, warn=warnings.append)
+    assert any("overrides global mount" in w for w in warnings)
+
+
+def test_load_config_accepts_mount_strings(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+mounts = [
+  "/host:/container:ro,Z",
+]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    with patch("cauldron.config.pathlib.Path.cwd", return_value=tmp_path / "project"):
+        loaded = config.load_config(warn=lambda _msg: None)
+
+    mount = loaded["container"]["mounts"][0]
+    assert mount["source"] == "/host"
+    assert mount["target"] == "/container"
+    assert mount["options"] == "ro,Z"
+
+
+def test_container_mounts_returns_normalized_mounts():
+    cfg = {
+        "container": {
+            "mounts": [
+                {"source": "/a", "target": "/b", "options": "ro"},
+                "/c:/d:rw,Z",
+            ]
+        }
+    }
+    mounts = config.container_mounts(cfg)
+    assert mounts == [
+        {"source": "/a", "target": "/b", "options": "ro"},
+        {"source": "/c", "target": "/d", "options": "rw,Z"},
+    ]
+
+
+def test_container_mounts_returns_empty_when_missing():
+    assert config.container_mounts({}) == []
+
+
+def test_load_config_merges_container_ports(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+ports = ["8080:8080", "3000:3000"]
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+ports = ["8080:8081"]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir, warn=lambda _msg: None)
+
+    ports = loaded["container"]["ports"]
+    assert "8080:8081" in ports
+    assert "3000:3000" in ports
+    assert "8080:8080" not in ports
+
+
+def test_container_ports_returns_configured_ports():
+    cfg = {"container": {"ports": ["8080:8080", "127.0.0.1:3000:3000"]}}
+    assert config.container_ports(cfg) == ["8080:8080", "127.0.0.1:3000:3000"]
+
+
+def test_container_ports_returns_empty_when_missing():
+    assert config.container_ports({}) == []

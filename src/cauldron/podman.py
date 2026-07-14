@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import warnings
 
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
@@ -209,6 +210,28 @@ def container_running(name):
     return result.stdout.strip().lower() == "true"
 
 
+def _selinux_enabled():
+    """Return True if SELinux is installed and currently enforcing/permissive."""
+    try:
+        result = subprocess.run(["selinuxenabled"], capture_output=True, text=True)
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _has_selinux_option(options):
+    """Return True if options contains an SELinux relabel option (z or Z)."""
+    return any(opt in ("z", "Z") for opt in options.split(","))
+
+
+def _format_mount_spec(mount):
+    """Format a normalized mount dict as a Podman -v argument."""
+    options = mount.get("options", "")
+    if options:
+        return f"{mount['source']}:{mount['target']}:{options}"
+    return f"{mount['source']}:{mount['target']}"
+
+
 def run_container(
     name,
     image,
@@ -219,11 +242,16 @@ def run_container(
     gitconfig=None,
     ssh_auth_sock=None,
     env=None,
+    mounts=None,
+    ports=None,
 ):
     """Create and start a detached container with the standard mounts.
 
     The optional ``env`` dict sets extra environment variables. If a PATH
     value contains ``${PATH}``, it is expanded with the image's default PATH.
+
+    ``mounts`` is a list of dicts with ``source``, ``target`` and ``options``.
+    ``ports`` is a list of strings in Podman's ``-p`` syntax.
 
     Returns True on success.
     """
@@ -252,6 +280,19 @@ def run_container(
     if ssh_auth_sock:
         args.extend(["-v", f"{ssh_auth_sock}:{ssh_auth_sock}:ro"])
         args.extend(["-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"])
+
+    selinux = _selinux_enabled()
+    for mount in mounts or []:
+        spec = _format_mount_spec(mount)
+        args.extend(["-v", spec])
+        if selinux and not _has_selinux_option(mount.get("options", "")):
+            warnings.warn(
+                f"Mount {mount['target']!r} has no SELinux relabel option "
+                "(z/Z); add it to options if files are not accessible"
+            )
+
+    for port in ports or []:
+        args.extend(["-p", port])
 
     env = env or {}
     if "PATH" in env and "${PATH}" in env["PATH"]:

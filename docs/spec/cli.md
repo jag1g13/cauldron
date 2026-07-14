@@ -74,6 +74,7 @@ Ensures the project's container is running. If the container does not exist, the
 - If a container with the chosen name already exists, it is restarted.
 - With `--build`, the existing container is removed so it can be recreated from the rebuilt image.
 - The current working directory, `~/.gitconfig`, and `SSH_AUTH_SOCK` are mounted as described in the overview.
+- Additional `[container] mounts` and `[container] ports` from the configuration are applied to the container.
 
 ## `stop`
 
