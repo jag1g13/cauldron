@@ -1,4 +1,3 @@
-import os
 import pathlib
 import sys
 
@@ -292,12 +291,13 @@ def exec_command(name, command, args):
     interactive, tty = _tty_flags()
 
     if command is None:
-        command = os.environ.get("SHELL", "/bin/bash")
+        command = podman.container_shell(container)
         args = ()
 
-    return podman.exec_in_container(
+    exit_code = podman.exec_in_container(
         container, command, args=args, interactive=interactive, tty=tty
     )
+    raise SystemExit(exit_code)
 
 
 @cli.command()
@@ -315,4 +315,5 @@ def code(name):
 
     project_dir = project.project_dir()
     click.echo(f"Opening {project_dir} in VSCode...")
-    return vscode.open_in_code(container, project_dir)
+    exit_code = vscode.open_in_code(container, project_dir)
+    raise SystemExit(exit_code)

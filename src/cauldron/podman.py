@@ -245,7 +245,7 @@ def run_container(
         "-w",
         str(workdir),
         "-v",
-        f"{project_dir}:{project_dir}:rw",
+        f"{project_dir}:{project_dir}:rw,Z",
     ]
 
     args.extend(["-e", f"HOME={CONTAINER_HOME}"])
@@ -292,6 +292,15 @@ def container_id(name):
 def stop_container(name):
     """Stop a running container. Returns True on success."""
     return _run(["stop", name]).returncode == 0
+
+
+def container_shell(name, fallback="bash"):
+    """Return the container user's $SHELL, or fallback if unset or empty."""
+    result = _run(["exec", name, "printenv", "SHELL"])
+    if result.returncode != 0:
+        return fallback
+    shell = result.stdout.strip()
+    return shell or fallback
 
 
 def exec_in_container(name, command, args=None, interactive=False, tty=False):

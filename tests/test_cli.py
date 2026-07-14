@@ -330,12 +330,24 @@ def test_exec_runs_command_in_running_container(mock_exec, mock_running, mock_ex
 
 @patch("cauldron.podman.container_exists", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=42)
+def test_exec_propagates_nonzero_exit_code(mock_exec, mock_running, mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["exec", "false"])
+    assert result.exit_code == 42
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.container_shell", return_value="/bin/zsh")
 @patch("cauldron.podman.exec_in_container", return_value=0)
-@patch.dict("os.environ", {"SHELL": "/bin/zsh"})
-def test_exec_opens_default_shell_when_no_command(mock_exec, mock_running, mock_exists):
+def test_exec_opens_default_shell_when_no_command(
+    mock_exec, mock_shell, mock_running, mock_exists
+):
     runner = CliRunner()
     result = runner.invoke(cli, ["exec"])
     assert result.exit_code == 0
+    mock_shell.assert_called_once()
     args, kwargs = mock_exec.call_args
     assert args[1] == "/bin/zsh"
 
@@ -400,6 +412,18 @@ def test_code_opens_project_in_vscode(
     mock_open.assert_called_once()
     args, _kwargs = mock_open.call_args
     assert "cauldron-" in args[0]
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.vscode.code_available", return_value=True)
+@patch("cauldron.vscode.open_in_code", return_value=1)
+def test_code_propagates_nonzero_exit_code(
+    mock_open, mock_code_available, mock_running, mock_exists
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["code"])
+    assert result.exit_code == 1
 
 
 @patch("cauldron.podman.container_exists", return_value=False)

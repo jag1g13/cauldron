@@ -220,6 +220,33 @@ def test_container_running_returns_false_when_not_running():
         assert podman.container_running("cauldron-foo") is False
 
 
+def test_container_shell_returns_shell_from_container():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "/bin/zsh\n"
+        assert podman.container_shell("cauldron-foo") == "/bin/zsh"
+        mock_run.assert_called_once_with(["exec", "cauldron-foo", "printenv", "SHELL"])
+
+
+def test_container_shell_returns_fallback_when_unset():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 1
+        assert podman.container_shell("cauldron-foo") == "bash"
+
+
+def test_container_shell_returns_fallback_when_empty():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "\n"
+        assert podman.container_shell("cauldron-foo") == "bash"
+
+
+def test_container_shell_accepts_custom_fallback():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 1
+        assert podman.container_shell("cauldron-foo", fallback="sh") == "sh"
+
+
 def test_image_env_parses_inspect_output():
     json_output = '["PATH=/usr/bin:/bin","FOO=bar"]'
     with patch("cauldron.podman._run") as mock_run:
@@ -310,6 +337,7 @@ def test_run_container_mounts_defaults():
         assert "keep-id" in args
         assert "--user" in args
         assert "1000:1000" in args
+        assert "/home/deck/projects/foo:/home/deck/projects/foo:rw,Z" in args
         assert args[-2:] == ["sleep", "infinity"]
 
 
