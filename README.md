@@ -92,6 +92,7 @@ Project ports override global ports when they refer to the same host port.
 
 - [Architecture and design](docs/spec/overview.md)
 - [CLI reference](docs/spec/cli.md)
+- [Configuration reference](docs/spec/config.md)
 
 ## Status
 

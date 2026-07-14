@@ -141,3 +141,8 @@ Global and project ports are merged by host port. A project port that maps the s
 - Cauldron runs containers rootless by default.
 - The host working directory is mounted read/write, so a container can modify project files.
 - SSH agent and Git configuration are passed through read-only, so the container can use the user's SSH keys and Git identity.
+
+## See also
+
+- [CLI reference](cli.md)
+- [Configuration reference](config.md)
