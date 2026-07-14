@@ -7,7 +7,7 @@ import threading
 
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
-BASE_IMAGE = "docker.io/library/debian:trixie-slim"
+BASE_IMAGE = "docker.io/library/debian:trixie"
 LOCAL_BASE_TAG = "cauldron-base:latest"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
