@@ -8,7 +8,6 @@ import threading
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
-LOCAL_BASE_TAG = "cauldron-base:latest"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
 
@@ -126,62 +125,59 @@ def image_env(image):
 
 
 def ensure_base_image(base_image=None):
-    """Ensure cauldron-base:latest exists, pulling and tagging if necessary.
+    """Ensure the base image exists locally, pulling it if necessary.
 
     If ``base_image`` is provided, it is used instead of the default base
-    image. When the local tag already exists and a custom base image is
-    requested, the local tag is only reused if it points to the same image.
+    image. The image is no longer re-tagged as ``cauldron-base:latest``; the
+    original image reference is used directly and passed to builds via the
+    ``CAULDRON_BASE`` build argument.
     """
     base = base_image or BASE_IMAGE
-    if image_exists(LOCAL_BASE_TAG):
-        if base_image is None:
-            return True
-        local_id = image_id(LOCAL_BASE_TAG)
-        base_id = image_id(base)
-        if local_id and base_id and local_id == base_id:
-            return True
-    if not pull(base):
-        return False
-    return tag(base, LOCAL_BASE_TAG)
+    if image_exists(base):
+        return True
+    return pull(base)
 
 
-def run_test_container():
+def run_test_container(base_image=None):
     """Run a throwaway container from the base image to verify it works."""
-    return (
-        _run(["run", "--rm", LOCAL_BASE_TAG, "echo", "cauldron-check-ok"]).returncode
-        == 0
-    )
+    base = base_image or BASE_IMAGE
+    return _run(["run", "--rm", base, "echo", "cauldron-check-ok"]).returncode == 0
 
 
-def build_image(tag, dockerfile, context):
+def build_image(tag, dockerfile, context, build_args=None):
     """Build an image from a Dockerfile and tag it.
+
+    ``build_args`` is an optional dictionary of build arguments passed to
+    Podman as ``--build-arg key=value``.
 
     Returns True on success.
     """
-    result = _run(
-        [
-            "build",
-            "-t",
-            tag,
-            "-f",
-            str(dockerfile),
-            str(context),
-        ]
-    )
+    args = [
+        "build",
+        "-t",
+        tag,
+        "-f",
+        str(dockerfile),
+    ]
+    for key, value in (build_args or {}).items():
+        args.extend(["--build-arg", f"{key}={value}"])
+    args.append(str(context))
+    result = _run(args)
     return result.returncode == 0
 
 
-def build_project_image(tag, uid, gid, intermediate_tag=None):
+def build_project_image(tag, uid, gid, base_image=None):
     """Build the final project image with the host user configured.
 
-    If intermediate_tag is provided, it is used as the base image; otherwise
-    cauldron-base:latest is used. The resulting image creates a user matching
-    the host UID/GID and sets HOME to /home/cauldron.
+    The base image is supplied through the ``CAULDRON_BASE`` build argument.
+    The resulting image creates a user matching the host UID/GID and sets
+    HOME to /home/cauldron.
 
     Returns True on success.
     """
-    base = intermediate_tag or LOCAL_BASE_TAG
-    dockerfile_content = f"""FROM {base}
+    base = base_image or BASE_IMAGE
+    dockerfile_content = f"""ARG CAULDRON_BASE
+FROM ${{CAULDRON_BASE}}
 USER root
 RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron
 ENV HOME={CONTAINER_HOME}
@@ -189,7 +185,7 @@ ENV HOME={CONTAINER_HOME}
     with tempfile.TemporaryDirectory() as tmpdir:
         dockerfile = pathlib.Path(tmpdir) / "Dockerfile"
         dockerfile.write_text(dockerfile_content)
-        return build_image(tag, dockerfile, tmpdir)
+        return build_image(tag, dockerfile, tmpdir, build_args={"CAULDRON_BASE": base})
 
 
 def container_exists(name):

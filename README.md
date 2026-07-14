@@ -6,7 +6,7 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 
 - Rootless Podman containers.
 - Per-project environments identified by directory name.
-- Custom Dockerfiles layered on top of a Debian base image.
+- Custom Dockerfiles layered on top of the configured base image via the `CAULDRON_BASE` build argument.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
 - Sensible defaults: project directory, `~/.gitconfig`, and SSH agent are available inside the container.
 - Commands for checking dependencies, initialising projects, starting/restarting, stopping, removing, listing, executing into, and opening VSCode in containers.
@@ -46,7 +46,7 @@ Use the `[container]` table to override the default Debian base image. This is u
 base_image = "astral/uv:python3.14-trixie"
 ```
 
-The image is pulled and tagged locally as `cauldron-base:latest` before the project image is built.
+The image is passed to the build as the `CAULDRON_BASE` build argument, so custom Dockerfiles can use `FROM ${CAULDRON_BASE}`.
 
 ### Environment variables
 

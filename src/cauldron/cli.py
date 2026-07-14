@@ -27,7 +27,7 @@ def check():
     steps = [
         ("podman is installed", podman.version),
         ("base image is available", lambda: podman.ensure_base_image(base_image)),
-        ("test container can run", podman.run_test_container),
+        ("test container can run", lambda: podman.run_test_container(base_image)),
     ]
 
     for description, step in steps:
@@ -41,7 +41,8 @@ def check():
     click.echo("All checks passed.")
 
 
-DOCKERFILE_TEMPLATE = """FROM cauldron-base
+DOCKERFILE_TEMPLATE = """ARG CAULDRON_BASE
+FROM ${CAULDRON_BASE}
 
 # Add project-specific packages and tools here.
 # These layers are built on top of the Cauldron base image.
@@ -158,7 +159,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             )
     elif build or not podman.image_exists(image):
         click.echo("Building project image...")
-        if not podman.ensure_base_image(base_image):
+        resolved_base = base_image or podman.BASE_IMAGE
+        if not podman.ensure_base_image(resolved_base):
             raise click.ClickException("Failed to ensure base image.")
 
         dockerfile = project.find_dockerfile()
@@ -166,12 +168,18 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         if dockerfile:
             intermediate = f"{image.split(':')[0]}-intermediate:latest"
             click.echo(f"Building intermediate image from {dockerfile}...")
-            if not podman.build_image(intermediate, dockerfile, dockerfile.parent):
+            if not podman.build_image(
+                intermediate,
+                dockerfile,
+                dockerfile.parent,
+                build_args={"CAULDRON_BASE": resolved_base},
+            ):
                 raise click.ClickException(
                     f"Failed to build intermediate image from {dockerfile}."
                 )
 
-        if not podman.build_project_image(image, uid, gid, intermediate):
+        project_base = intermediate or resolved_base
+        if not podman.build_project_image(image, uid, gid, project_base):
             raise click.ClickException("Failed to build project image.")
 
     click.echo(f"Starting container {container}...")

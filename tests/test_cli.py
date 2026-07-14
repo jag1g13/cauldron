@@ -4,6 +4,7 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from cauldron.cli import cli
+from cauldron import podman as podman_module
 
 
 def test_cli_without_command_prints_help():
@@ -39,7 +40,7 @@ def test_check_succeeds_when_all_steps_pass():
 
         podman_module.version = lambda: True
         podman_module.ensure_base_image = lambda _base_image=None: True
-        podman_module.run_test_container = lambda: True
+        podman_module.run_test_container = lambda _base_image=None: True
 
         try:
             result = runner.invoke(cli, ["check"])
@@ -215,13 +216,18 @@ def test_up_builds_intermediate_when_dockerfile_exists(
 ):
     dockerfile = tmp_path / ".cauldron" / "Dockerfile"
     dockerfile.parent.mkdir(parents=True)
-    dockerfile.write_text("FROM cauldron-base\nRUN echo hi\n")
+    dockerfile.write_text("ARG CAULDRON_BASE\nFROM ${CAULDRON_BASE}\nRUN echo hi\n")
 
     with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
         runner = CliRunner()
         result = runner.invoke(cli, ["up", "--build"])
         assert result.exit_code == 0
+        mock_base.assert_called_once_with(podman_module.BASE_IMAGE)
         mock_build_image.assert_called_once()
+        _, build_kwargs = mock_build_image.call_args
+        assert build_kwargs.get("build_args") == {
+            "CAULDRON_BASE": podman_module.BASE_IMAGE
+        }
         mock_project_build.assert_called_once()
 
 
@@ -459,7 +465,9 @@ def test_init_creates_cauldron_directory_and_templates():
 
         dockerfile = pathlib.Path(".cauldron/Dockerfile")
         assert dockerfile.exists()
-        assert "FROM cauldron-base" in dockerfile.read_text()
+        content = dockerfile.read_text()
+        assert "ARG CAULDRON_BASE" in content
+        assert "FROM ${CAULDRON_BASE}" in content
 
         config_file = pathlib.Path(".cauldron/cauldron.toml")
         assert config_file.exists()

@@ -32,8 +32,8 @@ host
   ├── cauldron CLI (Python/Click)
   │
   ├── Podman (rootless)
-  │     ├── builds cauldron-base image
-  │     ├── builds project image from cauldron-base + user Dockerfile
+  │     ├── pulls the configured base image
+  │     ├── builds project image from base image + user Dockerfile
   │     └── runs container named cauldron-<project-dir>
   │
   └── mounts into container
@@ -44,8 +44,8 @@ host
 
 ## Image build flow
 
-1. **Base image**: Cauldron pulls the configured base image (default: `docker.io/library/debian:trixie-slim`) and tags it locally as `cauldron-base:latest`. The base image can be overridden in the `[container]` table of the global or project config file.
-2. **User customisation**: If a custom Dockerfile exists, Cauldron builds it with `FROM cauldron-base`. The Dockerfile is searched in this order:
+1. **Base image**: Cauldron pulls the configured base image (default: `docker.io/library/debian:trixie-slim`). The base image can be overridden in the `[container]` table of the global or project config file.
+2. **User customisation**: If a custom Dockerfile exists, Cauldron builds it with the `CAULDRON_BASE` build argument, so the Dockerfile can use `FROM ${CAULDRON_BASE}`. The Dockerfile is searched in this order:
    - `.cauldron/Dockerfile` in the project directory.
    - `~/.config/cauldron/Dockerfile` in the user's home directory.
 3. **Project image**: The resulting image is tagged as `cauldron-<project-dir-name>:latest`.
@@ -100,7 +100,7 @@ The `[container]` table customises the container image.
 base_image = "astral/uv:python3.14-trixie"
 ```
 
-The configured image is pulled and tagged locally as `cauldron-base:latest` before the project image is built. Project values override global values.
+The configured image is passed to the build as the `CAULDRON_BASE` build argument. Project values override global values.
 
 ## Platform support
 
