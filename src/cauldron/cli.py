@@ -234,6 +234,12 @@ def code(name):
             "Make sure VSCode is installed and 'code' is on your PATH."
         )
 
+    container_id = podman.container_id(container)
+    if container_id is None:
+        raise click.ClickException(
+            f"Could not determine container ID for '{container}'."
+        )
+
     project_dir = project.project_dir()
     click.echo(f"Opening {project_dir} in VSCode...")
-    return vscode.open_in_code(container, project_dir)
+    return vscode.open_in_code(container_id, project_dir)

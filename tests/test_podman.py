@@ -249,6 +249,22 @@ def test_start_container_runs_podman_start():
         mock_run.assert_called_once_with(["start", "cauldron-foo"])
 
 
+def test_container_id_returns_id():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "abc123\n"
+        assert podman.container_id("cauldron-foo") == "abc123"
+        mock_run.assert_called_once_with(
+            ["container", "inspect", "-f", "{{.Id}}", "cauldron-foo"]
+        )
+
+
+def test_container_id_returns_none_on_failure():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 1
+        assert podman.container_id("cauldron-foo") is None
+
+
 def test_stop_container_runs_podman_stop():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0

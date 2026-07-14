@@ -223,6 +223,14 @@ def start_container(name):
     return _run(["start", name]).returncode == 0
 
 
+def container_id(name):
+    """Return the container ID for the named container, or None if not found."""
+    result = _run(["container", "inspect", "-f", "{{.Id}}", name])
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def stop_container(name):
     """Stop a running container. Returns True on success."""
     return _run(["stop", name]).returncode == 0
