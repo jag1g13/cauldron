@@ -38,7 +38,7 @@ def test_check_succeeds_when_all_steps_pass():
         original_run_test_container = podman_module.run_test_container
 
         podman_module.version = lambda: True
-        podman_module.ensure_base_image = lambda: True
+        podman_module.ensure_base_image = lambda _base_image=None: True
         podman_module.run_test_container = lambda: True
 
         try:
@@ -148,6 +148,37 @@ def test_up_builds_and_starts_container_when_image_missing(
     assert "is running" in result.output
     mock_build.assert_called_once()
     mock_run.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=False)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_uses_configured_base_image(
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_base,
+    mock_image,
+    mock_container,
+    tmp_path,
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[container]
+base_image = "astral/uv:python3.14-trixie"
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 0
+        mock_base.assert_called_once_with("astral/uv:python3.14-trixie")
 
 
 @patch("cauldron.podman.container_exists", return_value=False)

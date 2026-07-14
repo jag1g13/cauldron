@@ -47,6 +47,37 @@ PATH = "/project/bin:${PATH}"
     assert loaded["env"]["EDITOR"] == "vim"
 
 
+def test_load_config_merges_container_table(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+base_image = "global/base:latest"
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+base_image = "project/base:latest"
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir)
+    assert loaded["container"]["base_image"] == "project/base:latest"
+
+
+def test_base_image_returns_configured_value():
+    cfg = {"container": {"base_image": "astral/uv:python3.14-trixie"}}
+    assert config.base_image(cfg) == "astral/uv:python3.14-trixie"
+
+
+def test_base_image_returns_none_when_missing():
+    assert config.base_image({}) is None
+
+
 def test_container_env_extracts_strings():
     cfg = {"env": {"PATH": "/extra/bin:${PATH}", "EDITOR": "vim"}}
     assert config.container_env(cfg) == {

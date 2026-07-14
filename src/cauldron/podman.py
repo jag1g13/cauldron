@@ -95,6 +95,14 @@ def image_exists(image):
     return _run(["image", "exists", image]).returncode == 0
 
 
+def image_id(image):
+    """Return the image ID, or None if the image is not found."""
+    result = _run(["image", "inspect", image, "-f", "{{.Id}}"])
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def image_env(image):
     """Return environment variables defined in an image's config.
 
@@ -117,13 +125,24 @@ def image_env(image):
     return env
 
 
-def ensure_base_image():
-    """Ensure cauldron-base:latest exists, pulling and tagging if necessary."""
+def ensure_base_image(base_image=None):
+    """Ensure cauldron-base:latest exists, pulling and tagging if necessary.
+
+    If ``base_image`` is provided, it is used instead of the default base
+    image. When the local tag already exists and a custom base image is
+    requested, the local tag is only reused if it points to the same image.
+    """
+    base = base_image or BASE_IMAGE
     if image_exists(LOCAL_BASE_TAG):
-        return True
-    if not pull(BASE_IMAGE):
+        if base_image is None:
+            return True
+        local_id = image_id(LOCAL_BASE_TAG)
+        base_id = image_id(base)
+        if local_id and base_id and local_id == base_id:
+            return True
+    if not pull(base):
         return False
-    return tag(BASE_IMAGE, LOCAL_BASE_TAG)
+    return tag(base, LOCAL_BASE_TAG)
 
 
 def run_test_container():

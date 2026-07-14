@@ -37,6 +37,19 @@ Cauldron reads optional TOML configuration files. Project settings override glob
 - Global: `~/.config/cauldron/cauldron.toml`
 - Project: `.cauldron/cauldron.toml`
 
+### Base image
+
+Use the `[container]` table to override the default Debian base image. This is useful when a project needs a different distribution or a pre-installed toolchain.
+
+```toml
+[container]
+base_image = "astral/uv:python3.14-trixie"
+```
+
+The image is pulled and tagged locally as `cauldron-base:latest` before the project image is built.
+
+### Environment variables
+
 Use the `[env]` table to set environment variables inside the container. This is useful for extending the `PATH` for tools installed by a custom Dockerfile, such as OpenCode installed with its default curl installer.
 
 ```toml

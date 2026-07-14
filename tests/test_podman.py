@@ -78,6 +78,22 @@ def test_version_returns_false_when_podman_fails():
         assert podman.version() is False
 
 
+def test_image_id_returns_id_on_success():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "sha256:abc123\n"
+        assert podman.image_id("cauldron-base:latest") == "sha256:abc123"
+        mock_run.assert_called_once_with(
+            ["image", "inspect", "cauldron-base:latest", "-f", "{{.Id}}"]
+        )
+
+
+def test_image_id_returns_none_on_failure():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 1
+        assert podman.image_id("cauldron-base:latest") is None
+
+
 def test_ensure_base_image_returns_true_if_image_exists():
     with patch("cauldron.podman.image_exists", return_value=True) as mock_exists:
         assert podman.ensure_base_image() is True
@@ -93,6 +109,29 @@ def test_ensure_base_image_pulls_and_tags_when_missing():
                 mock_tag.assert_called_once_with(
                     podman.BASE_IMAGE, podman.LOCAL_BASE_TAG
                 )
+
+
+def test_ensure_base_image_uses_configured_base_image():
+    with patch("cauldron.podman.image_exists", return_value=False):
+        with patch("cauldron.podman.pull", return_value=True) as mock_pull:
+            with patch("cauldron.podman.tag", return_value=True) as mock_tag:
+                assert podman.ensure_base_image("astral/uv:python3.14-trixie") is True
+                mock_pull.assert_called_once_with("astral/uv:python3.14-trixie")
+                mock_tag.assert_called_once_with(
+                    "astral/uv:python3.14-trixie", podman.LOCAL_BASE_TAG
+                )
+
+
+def test_ensure_base_image_skips_pull_when_local_tag_matches_configured():
+    with patch("cauldron.podman.image_exists", return_value=True):
+        with patch(
+            "cauldron.podman.image_id", return_value="sha256:abc123"
+        ) as mock_image_id:
+            with patch("cauldron.podman.pull") as mock_pull:
+                assert podman.ensure_base_image("astral/uv:python3.14-trixie") is True
+                mock_image_id.assert_any_call("cauldron-base:latest")
+                mock_image_id.assert_any_call("astral/uv:python3.14-trixie")
+                mock_pull.assert_not_called()
 
 
 def test_ensure_base_image_fails_when_pull_fails():

@@ -23,9 +23,11 @@ def cli(ctx, verbose):
 @cli.command()
 def check():
     """Check that dependencies are installed and Podman can pull, build, and run."""
+    cfg = config.load_config()
+    base_image = config.base_image(cfg)
     steps = [
         ("podman is installed", podman.version),
-        ("base image is available", podman.ensure_base_image),
+        ("base image is available", lambda: podman.ensure_base_image(base_image)),
         ("test container can run", podman.run_test_container),
     ]
 
@@ -48,8 +50,12 @@ DOCKERFILE_TEMPLATE = """FROM cauldron-base
 
 CONFIG_TEMPLATE = """# Cauldron project configuration.
 #
+# Use the [container] table to customise the container image.
 # Use the [env] table to set environment variables inside the container.
 # PATH values may use ${PATH} as a placeholder for the image's default PATH.
+
+[container]
+# base_image = "astral/uv:python3.14-trixie"
 
 [env]
 # PATH = "/home/cauldron/.local/bin:${PATH}"
@@ -105,6 +111,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     image = project.project_image_name()
     project_dir = project.project_dir()
     uid, gid = project.host_user()
+    cfg = config.load_config(project_dir)
+    base_image = config.base_image(cfg)
 
     if podman.container_exists(container):
         if restart:
@@ -151,7 +159,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             )
     elif build or not podman.image_exists(image):
         click.echo("Building project image...")
-        if not podman.ensure_base_image():
+        if not podman.ensure_base_image(base_image):
             raise click.ClickException("Failed to ensure base image.")
 
         dockerfile = project.find_dockerfile()
@@ -168,7 +176,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             raise click.ClickException("Failed to build project image.")
 
     click.echo(f"Starting container {container}...")
-    container_env = config.container_env(config.load_config(project_dir))
+    container_env = config.container_env(cfg)
     if not podman.run_container(
         name=container,
         image=image,

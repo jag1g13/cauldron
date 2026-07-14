@@ -44,7 +44,7 @@ host
 
 ## Image build flow
 
-1. **Base image**: Cauldron pulls `docker.io/library/debian:trixie-slim` and tags it locally as `cauldron-base:latest`.
+1. **Base image**: Cauldron pulls the configured base image (default: `docker.io/library/debian:trixie-slim`) and tags it locally as `cauldron-base:latest`. The base image can be overridden in the `[container]` table of the global or project config file.
 2. **User customisation**: If a custom Dockerfile exists, Cauldron builds it with `FROM cauldron-base`. The Dockerfile is searched in this order:
    - `.cauldron/Dockerfile` in the project directory.
    - `~/.config/cauldron/Dockerfile` in the user's home directory.
@@ -90,6 +90,17 @@ EDITOR = "vim"
 `PATH` values may use `${PATH}` as a placeholder; Cauldron expands it to the image's default `PATH` when starting the container. Other variables are passed through as literal strings.
 
 Project env values override global env values at the key level.
+
+### Base image
+
+The `[container]` table customises the container image.
+
+```toml
+[container]
+base_image = "astral/uv:python3.14-trixie"
+```
+
+The configured image is pulled and tagged locally as `cauldron-base:latest` before the project image is built. Project values override global values.
 
 ## Platform support
 

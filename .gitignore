@@ -4,3 +4,6 @@ __pycache__/
 
 # Packaging
 *.egg-info/
+
+# Development environment
+.cauldron/

@@ -25,7 +25,15 @@ def load_config(project_dir=None):
     if "env" in project_config:
         config.setdefault("env", {}).update(project_config["env"])
 
+    if "container" in project_config:
+        config.setdefault("container", {}).update(project_config["container"])
+
     return config
+
+
+def base_image(config):
+    """Return the configured base image, or None to use the default."""
+    return config.get("container", {}).get("base_image")
 
 
 def container_env(config):
