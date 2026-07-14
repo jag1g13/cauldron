@@ -53,29 +53,3 @@ def test_host_user_returns_strings():
     uid, gid = project.host_user()
     assert uid == str(os.getuid())
     assert gid == str(os.getgid())
-
-
-def test_gitconfig_path_returns_existing_file(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    gitconfig = home / ".gitconfig"
-    gitconfig.write_text("[user]\n")
-    monkeypatch.setattr(project.pathlib.Path, "home", lambda: home)
-    assert project.gitconfig_path() == gitconfig
-
-
-def test_gitconfig_path_returns_none_when_missing(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setattr(project.pathlib.Path, "home", lambda: home)
-    assert project.gitconfig_path() is None
-
-
-def test_ssh_auth_sock_reads_environment(monkeypatch):
-    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/1000/keyring/ssh")
-    assert project.ssh_auth_sock() == "/run/user/1000/keyring/ssh"
-
-
-def test_ssh_auth_sock_returns_none_when_unset(monkeypatch):
-    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
-    assert project.ssh_auth_sock() is None

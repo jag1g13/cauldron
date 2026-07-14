@@ -8,7 +8,7 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 - Per-project environments identified by directory name.
 - Custom Dockerfiles layered on top of the configured base image via the `CAULDRON_BASE` build argument.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
-- Sensible defaults: project directory, `~/.gitconfig`, and SSH agent are available inside the container.
+- Additional mounts and port forwards declared in the config file.
 - Commands for checking dependencies, initialising projects, starting/restarting, stopping, removing, listing, executing into, and opening VSCode in containers.
 
 ## Quick start
@@ -87,6 +87,21 @@ ports = [
 ```
 
 Project ports override global ports when they refer to the same host port.
+
+### Git and SSH agent passthrough
+
+Git configuration and SSH agent forwarding are no longer handled specially by Cauldron. Add them as ordinary mounts and environment variables in your config file. `cauldron init` creates a reference config that includes commented examples for `~/.gitconfig` and `SSH_AUTH_SOCK`.
+
+```toml
+[container]
+mounts = [
+  {source = "/home/deck/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
+  {source = "/run/user/1000/keyring/ssh", target = "/run/user/1000/keyring/ssh", options = "ro"},
+]
+
+[env]
+SSH_AUTH_SOCK = "/run/user/1000/keyring/ssh"
+```
 
 ## Documentation
 

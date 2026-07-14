@@ -1,9 +1,15 @@
+import importlib.resources
 import pathlib
 import sys
 
 import click
 
 from cauldron import config, podman, project, vscode
+
+
+def _read_data_file(name):
+    """Return the text of a reference file shipped with Cauldron."""
+    return importlib.resources.files("cauldron.data").joinpath(name).read_text()
 
 
 @click.group(invoke_without_command=True)
@@ -41,33 +47,6 @@ def check():
     click.echo("All checks passed.")
 
 
-DOCKERFILE_TEMPLATE = """ARG CAULDRON_BASE
-FROM ${CAULDRON_BASE}
-
-# Add project-specific packages and tools here.
-# These layers are built on top of the Cauldron base image.
-"""
-
-CONFIG_TEMPLATE = """# Cauldron project configuration.
-#
-# Use the [container] table to customise the container image, mounts, and ports.
-# Use the [env] table to set environment variables inside the container.
-# PATH values may use ${PATH} as a placeholder for the image's default PATH.
-
-[container]
-# base_image = "astral/uv:python3.14-trixie"
-# mounts = [
-#   {source = "/host/path", target = "/container/path", options = "ro,Z"},
-# ]
-# ports = [
-#   "8080:8080",
-# ]
-
-[env]
-# PATH = "/home/cauldron/.local/bin:${PATH}"
-"""
-
-
 @cli.command()
 def init():
     """Create a .cauldron directory with template files for this project."""
@@ -84,14 +63,14 @@ def init():
     if dockerfile.exists():
         click.echo(f"Keeping existing {rel_dir / 'Dockerfile'}")
     else:
-        dockerfile.write_text(DOCKERFILE_TEMPLATE)
+        dockerfile.write_text(_read_data_file("Dockerfile"))
         click.echo(f"Created {rel_dir / 'Dockerfile'}")
 
     config_file = cauldron_dir / "cauldron.toml"
     if config_file.exists():
         click.echo(f"Keeping existing {rel_dir / 'cauldron.toml'}")
     else:
-        config_file.write_text(CONFIG_TEMPLATE)
+        config_file.write_text(_read_data_file("cauldron.toml"))
         click.echo(f"Created {rel_dir / 'cauldron.toml'}")
 
 
@@ -197,8 +176,6 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         project_dir=project_dir,
         uid=uid,
         gid=gid,
-        gitconfig=project.gitconfig_path(),
-        ssh_auth_sock=project.ssh_auth_sock(),
         env=container_env,
         mounts=config.container_mounts(cfg),
         ports=config.container_ports(cfg),

@@ -7,7 +7,7 @@ Cauldron is a Python/Click command-line tool that creates and manages containeri
 - Provide a small, predictable CLI for day-to-day containerised development.
 - Use rootless Podman as the only supported container runtime.
 - Let developers customise their environment with a personal or per-project Dockerfile.
-- Make the host working directory, Git configuration, and SSH agent available inside the container with sensible defaults.
+- Make the host working directory available inside the container, and allow Git configuration, SSH agent, and other host resources to be passed through via config-file mounts.
 - Work on Linux and macOS initially; WSL2 support is desirable but secondary.
 
 ## Non-goals
@@ -38,8 +38,7 @@ host
   │
   └── mounts into container
         ├── current working directory (read/write)
-        ├── ~/.gitconfig (read-only)
-        └── SSH_AUTH_SOCK (read-only)
+        └── additional mounts declared in cauldron.toml
 ```
 
 ## Image build flow
@@ -66,9 +65,8 @@ If the project image already exists, it is reused unless `cauldron up --build` i
 
 - The container runs rootless with the host user's UID and GID.
 - The current working directory is mounted at the same absolute path as on the host.
-- `~/.gitconfig` is mounted read-only into the container user's home directory.
-- `SSH_AUTH_SOCK` is mounted read-only and the environment variable is passed through.
 - The container user's home directory is ephemeral and is discarded when the container is removed.
+- Git configuration, SSH agent forwarding, and other host resources are not mounted automatically. Add them as ordinary mounts and environment variables in the config file. `cauldron init` ships a reference config with commented examples for `~/.gitconfig` and `SSH_AUTH_SOCK`.
 
 ## Configuration files
 
@@ -140,7 +138,7 @@ Global and project ports are merged by host port. A project port that maps the s
 
 - Cauldron runs containers rootless by default.
 - The host working directory is mounted read/write, so a container can modify project files.
-- SSH agent and Git configuration are passed through read-only, so the container can use the user's SSH keys and Git identity.
+- SSH agent, Git configuration, and any other extra mounts are declared in the config file and follow the read/write options chosen there.
 
 ## See also
 

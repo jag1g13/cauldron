@@ -369,25 +369,6 @@ def test_run_container_mounts_defaults():
         assert args[-2:] == ["sleep", "infinity"]
 
 
-def test_run_container_mounts_gitconfig_and_ssh_agent():
-    with patch("cauldron.podman._run") as mock_run:
-        mock_run.return_value.returncode = 0
-        podman.run_container(
-            name="cauldron-foo",
-            image="cauldron-foo:latest",
-            workdir="/home/deck/projects/foo",
-            project_dir="/home/deck/projects/foo",
-            uid="1000",
-            gid="1000",
-            gitconfig="/home/deck/.gitconfig",
-            ssh_auth_sock="/run/user/1000/keyring/ssh",
-        )
-        args = mock_run.call_args[0][0]
-        assert "/home/deck/.gitconfig:/home/cauldron/.gitconfig:ro,Z" in args
-        assert "/run/user/1000/keyring/ssh:/run/user/1000/keyring/ssh:ro" in args
-        assert "SSH_AUTH_SOCK=/run/user/1000/keyring/ssh" in args
-
-
 def test_run_container_adds_project_label():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0

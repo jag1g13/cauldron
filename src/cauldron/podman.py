@@ -239,8 +239,6 @@ def run_container(
     project_dir,
     uid,
     gid,
-    gitconfig=None,
-    ssh_auth_sock=None,
     env=None,
     mounts=None,
     ports=None,
@@ -252,6 +250,9 @@ def run_container(
 
     ``mounts`` is a list of dicts with ``source``, ``target`` and ``options``.
     ``ports`` is a list of strings in Podman's ``-p`` syntax.
+
+    Git configuration and SSH agent forwarding are no longer handled here;
+    add them as ordinary mounts and environment variables in the config file.
 
     Returns True on success.
     """
@@ -273,13 +274,6 @@ def run_container(
     ]
 
     args.extend(["-e", f"HOME={CONTAINER_HOME}"])
-
-    if gitconfig:
-        args.extend(["-v", f"{gitconfig}:{CONTAINER_HOME}/.gitconfig:ro,Z"])
-
-    if ssh_auth_sock:
-        args.extend(["-v", f"{ssh_auth_sock}:{ssh_auth_sock}:ro"])
-        args.extend(["-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"])
 
     selinux = _selinux_enabled()
     for mount in mounts or []:

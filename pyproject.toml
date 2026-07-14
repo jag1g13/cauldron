@@ -11,6 +11,16 @@ dependencies = [
 [project.scripts]
 cauldron = "cauldron.__main__:main"
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cauldron"]
+
+[tool.hatch.build.targets.wheel.package-data]
+cauldron = ["data/*"]
+
 [dependency-groups]
 dev = [
     "prek>=0.4.9",

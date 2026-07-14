@@ -48,7 +48,7 @@ cauldron init
 Creates a `.cauldron` directory in the current project with template files:
 
 - `.cauldron/Dockerfile` – a starting Dockerfile with `ARG CAULDRON_BASE` and `FROM ${CAULDRON_BASE}`.
-- `.cauldron/cauldron.toml` – a starting configuration file with an `[env]` section.
+- `.cauldron/cauldron.toml` – a starting configuration file with `[container]` and `[env]` sections, including commented examples for Git and SSH agent passthrough.
 
 If the files already exist, they are left untouched and a message is printed.
 
@@ -73,8 +73,8 @@ Ensures the project's container is running. If the container does not exist, the
 - The project image is built from the custom Dockerfile (if any) on top of the configured base image, using the `CAULDRON_BASE` build argument.
 - If a container with the chosen name already exists, it is restarted.
 - With `--build`, the existing container is removed so it can be recreated from the rebuilt image.
-- The current working directory, `~/.gitconfig`, and `SSH_AUTH_SOCK` are mounted as described in the overview.
-- Additional `[container] mounts` and `[container] ports` from the configuration are applied to the container.
+- The current working directory is mounted read/write as described in the overview.
+- Additional `[container] mounts` and `[container] ports` from the configuration are applied to the container, including any Git or SSH agent mounts declared by the user.
 
 ## `stop`
 

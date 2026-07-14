@@ -1,0 +1,24 @@
+# Cauldron project configuration.
+#
+# Use the [container] table to customise the container image, mounts, and ports.
+# Use the [env] table to set environment variables inside the container.
+# PATH values may use ${PATH} as a placeholder for the image's default PATH.
+#
+# The example mounts below pass through your Git configuration and SSH agent
+# socket. Uncomment them and adjust the host paths to match your system.
+
+[container]
+# base_image = "astral/uv:python3.14-trixie"
+
+# mounts = [
+#   {source = "/home/CHANGE_ME/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
+#   {source = "/run/user/CHANGE_ME/keyring/ssh", target = "/run/user/CHANGE_ME/keyring/ssh", options = "ro"},
+# ]
+
+# ports = [
+#   "8080:8080",
+# ]
+
+[env]
+# PATH = "/home/cauldron/.local/bin:${PATH}"
+# SSH_AUTH_SOCK = "/run/user/CHANGE_ME/keyring/ssh"

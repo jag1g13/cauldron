@@ -69,6 +69,23 @@ ports = [
 
 Each entry is a string in Podman's `-p` syntax. Global and project ports are merged by host port. If a project port maps the same host port as a global port, the project port wins and Cauldron emits a warning.
 
+#### Git and SSH agent passthrough
+
+Git configuration and SSH agent forwarding are configured as ordinary mounts and environment variables, not as hard-coded behaviour.
+
+```toml
+[container]
+mounts = [
+  {source = "/home/deck/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
+  {source = "/run/user/1000/keyring/ssh", target = "/run/user/1000/keyring/ssh", options = "ro"},
+]
+
+[env]
+SSH_AUTH_SOCK = "/run/user/1000/keyring/ssh"
+```
+
+`cauldron init` writes a reference `.cauldron/cauldron.toml` with commented examples for these mounts. Uncomment them and adjust the host paths to match your system.
+
 ### `[env]` — environment variables
 
 Set environment variables inside the container.
