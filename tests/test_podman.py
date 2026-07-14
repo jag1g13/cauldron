@@ -249,6 +249,13 @@ def test_start_container_runs_podman_start():
         mock_run.assert_called_once_with(["start", "cauldron-foo"])
 
 
+def test_restart_container_runs_podman_restart():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.restart_container("cauldron-foo") is True
+        mock_run.assert_called_once_with(["restart", "cauldron-foo"])
+
+
 def test_container_id_returns_id():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0

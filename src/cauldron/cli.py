@@ -44,12 +44,16 @@ def _tty_flags():
     return sys.stdin.isatty(), sys.stdout.isatty()
 
 
-def _start_project_container(container, build=False, no_build=False):
+def _start_project_container(container, build=False, no_build=False, restart=False):
     """Ensure the project's container exists and is running.
 
     If the container already exists and is stopped, it is started. If it does
     not exist, the image is built (subject to build/no_build flags) and a new
     container is created and started.
+
+    When ``restart`` is true, an existing container is restarted instead of
+    being left running. If ``build`` is also true, the existing container is
+    removed so it can be recreated from the rebuilt image.
     """
     if build and no_build:
         raise click.ClickException("--build and --no-build cannot be used together.")
@@ -59,15 +63,42 @@ def _start_project_container(container, build=False, no_build=False):
     uid, gid = project.host_user()
 
     if podman.container_exists(container):
-        if podman.container_running(container):
+        if restart:
+            if build:
+                click.echo(
+                    f"Stopping and removing existing container {container} for rebuild..."
+                )
+                if podman.container_running(container) and not podman.stop_container(
+                    container
+                ):
+                    raise click.ClickException(f"Failed to stop container {container}.")
+                if not podman.remove_container(container):
+                    raise click.ClickException(
+                        f"Failed to remove container {container}."
+                    )
+                # Fall through to build and recreate the container.
+            else:
+                click.echo(f"Restarting container {container}...")
+                if not podman.restart_container(container):
+                    raise click.ClickException(
+                        f"Failed to restart container {container}."
+                    )
+                if not podman.container_running(container):
+                    raise click.ClickException(
+                        f"Container {container} did not restart."
+                    )
+                click.echo(f"Container {container} is running.")
+                return
+        else:
+            if podman.container_running(container):
+                return
+            click.echo(f"Starting existing container {container}...")
+            if not podman.start_container(container):
+                raise click.ClickException(f"Failed to start container {container}.")
+            if not podman.container_running(container):
+                raise click.ClickException(f"Container {container} did not start.")
+            click.echo(f"Container {container} is running.")
             return
-        click.echo(f"Starting existing container {container}...")
-        if not podman.start_container(container):
-            raise click.ClickException(f"Failed to start container {container}.")
-        if not podman.container_running(container):
-            raise click.ClickException(f"Container {container} did not start.")
-        click.echo(f"Container {container} is running.")
-        return
 
     if no_build:
         if not podman.image_exists(image):
@@ -118,16 +149,10 @@ def _start_project_container(container, build=False, no_build=False):
     "--no-build", is_flag=True, help="Never build; fail if the image is missing."
 )
 def up(name, build, no_build):
-    """Build if necessary and start the project's container."""
+    """Start or restart the project's container, building the image if needed."""
     container = project.container_name(override=name)
 
-    if podman.container_exists(container):
-        raise click.ClickException(
-            f"Container '{container}' already exists. "
-            "Remove it with 'cauldron rm' before running 'up'."
-        )
-
-    _start_project_container(container, build=build, no_build=no_build)
+    _start_project_container(container, build=build, no_build=no_build, restart=True)
 
 
 @cli.command()

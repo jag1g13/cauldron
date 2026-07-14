@@ -7,7 +7,7 @@ import threading
 
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
-BASE_IMAGE = "docker.io/library/debian:trixie"
+BASE_IMAGE = "docker.io/library/debian:trixie-slim"
 LOCAL_BASE_TAG = "cauldron-base:latest"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
@@ -221,6 +221,11 @@ def run_container(
 def start_container(name):
     """Start a stopped container. Returns True on success."""
     return _run(["start", name]).returncode == 0
+
+
+def restart_container(name):
+    """Restart a container. Returns True on success."""
+    return _run(["restart", name]).returncode == 0
 
 
 def container_id(name):

@@ -74,11 +74,46 @@ def test_up_rejects_conflicting_build_flags(mock_exists):
 
 
 @patch("cauldron.podman.container_exists", return_value=True)
-def test_up_fails_when_container_already_exists(mock_exists):
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.restart_container", return_value=True)
+def test_up_restarts_existing_running_container(
+    mock_restart, mock_running, mock_exists
+):
     runner = CliRunner()
     result = runner.invoke(cli, ["up"])
-    assert result.exit_code != 0
-    assert "already exists" in result.output
+    assert result.exit_code == 0
+    assert "Restarting container" in result.output
+    mock_restart.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.stop_container", return_value=True)
+@patch("cauldron.podman.remove_container", return_value=True)
+@patch("cauldron.podman.image_exists", return_value=True)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_build_rebuilds_and_replaces_existing_container(
+    mock_dockerfile,
+    mock_run,
+    mock_build,
+    mock_base,
+    mock_image,
+    mock_remove,
+    mock_stop,
+    mock_running,
+    mock_exists,
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["up", "--build"])
+    assert result.exit_code == 0
+    assert "Stopping and removing" in result.output
+    mock_stop.assert_called_once()
+    mock_remove.assert_called_once()
+    mock_build.assert_called_once()
+    mock_run.assert_called_once()
 
 
 @patch("cauldron.podman.container_exists", return_value=False)

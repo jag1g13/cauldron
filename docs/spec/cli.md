@@ -16,7 +16,7 @@ Options that apply to individual commands (for example `--name`) are listed unde
 | Command | Description |
 |---|---|
 | [`check`](#check) | Verify dependencies and that Podman can pull, build, and run images. |
-| [`up`](#up) | Build if necessary and start the project's container. |
+| [`up`](#up) | Start or restart the project's container, building the image if needed. |
 | [`stop`](#stop) | Stop the project's container. |
 | [`rm`](#rm) | Remove the project's container. |
 | [`ps`](#ps) | List Cauldron-managed containers. |
@@ -44,20 +44,21 @@ If any step fails, the command exits with a non-zero status and prints the failu
 cauldron up [OPTIONS]
 ```
 
-Builds the project image if it does not exist and starts the container, blocking until the container is running.
+Ensures the project's container is running. If the container does not exist, the image is built (unless `--no-build` is used) and a new container is started. If the container already exists, it is restarted.
 
 ### Options
 
 | Option | Description |
 |---|---|
 | `--name NAME` | Use `NAME` instead of the default `cauldron-<project-dir-name>`. |
-| `--build` | Force a rebuild of the project image even if one already exists. |
+| `--build` | Force a rebuild of the project image and recreate the container. |
 | `--no-build` | Never build; fail if the project image is missing. |
 
 ### Behaviour
 
 - The project image is built from the custom Dockerfile (if any) on top of `cauldron-base:latest`.
-- If a container with the chosen name already exists, the command fails with Podman's default error.
+- If a container with the chosen name already exists, it is restarted.
+- With `--build`, the existing container is removed so it can be recreated from the rebuilt image.
 - The current working directory, `~/.gitconfig`, and `SSH_AUTH_SOCK` are mounted as described in the overview.
 
 ## `stop`
