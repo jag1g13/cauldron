@@ -21,6 +21,12 @@ def test_build_remote_uri_encodes_container_name():
     assert "/home/deck/projects/foo" in uri
 
 
+def test_build_remote_uri_keeps_container_name_readable():
+    uri = vscode.build_remote_uri("cauldron-foo_bar", "/home/deck/projects/foo")
+    assert "vscode-remote://attached-container+cauldron-foo_bar/" in uri
+    assert "%2D" not in uri
+
+
 def test_build_remote_uri_encodes_special_characters():
     uri = vscode.build_remote_uri("cauldron_foo", "/home/deck/projects/foo bar")
     assert "foo%20bar" in uri

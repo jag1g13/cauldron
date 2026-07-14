@@ -16,7 +16,7 @@ def build_remote_uri(container_name, workdir):
     The URI scheme used is `vscode-remote://attached-container+<name><path>`,
     which opens the Remote-Containers extension's attach flow.
     """
-    encoded_name = urllib.parse.quote(str(container_name), safe="")
+    encoded_name = urllib.parse.quote(str(container_name), safe="-_.")
     encoded_path = urllib.parse.quote(str(workdir), safe="/")
     return f"vscode-remote://attached-container+{encoded_name}{encoded_path}"
 
