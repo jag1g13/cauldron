@@ -1,3 +1,4 @@
+import pathlib
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -391,3 +392,38 @@ def test_code_auto_starts_container_when_not_exists(
     assert result.exit_code == 0
     mock_run.assert_called_once()
     mock_open.assert_called_once()
+
+
+def test_init_creates_cauldron_directory_and_templates():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["init"])
+        assert result.exit_code == 0
+        assert "Created .cauldron/Dockerfile" in result.output
+        assert "Created .cauldron/cauldron.toml" in result.output
+
+        dockerfile = pathlib.Path(".cauldron/Dockerfile")
+        assert dockerfile.exists()
+        assert "FROM cauldron-base" in dockerfile.read_text()
+
+        config_file = pathlib.Path(".cauldron/cauldron.toml")
+        assert config_file.exists()
+        assert "[env]" in config_file.read_text()
+
+
+def test_init_keeps_existing_files():
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        pathlib.Path(".cauldron").mkdir()
+        pathlib.Path(".cauldron/Dockerfile").write_text("FROM custom\n")
+        pathlib.Path(".cauldron/cauldron.toml").write_text('[env]\nFOO = "bar"\n')
+
+        result = runner.invoke(cli, ["init"])
+        assert result.exit_code == 0
+        assert "Keeping existing .cauldron/Dockerfile" in result.output
+        assert "Keeping existing .cauldron/cauldron.toml" in result.output
+        assert pathlib.Path(".cauldron/Dockerfile").read_text() == "FROM custom\n"
+        assert (
+            pathlib.Path(".cauldron/cauldron.toml").read_text()
+            == '[env]\nFOO = "bar"\n'
+        )

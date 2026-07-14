@@ -16,6 +16,7 @@ Options that apply to individual commands (for example `--name`) are listed unde
 | Command | Description |
 |---|---|
 | [`check`](#check) | Verify dependencies and that Podman can pull, build, and run images. |
+| [`init`](#init) | Create a `.cauldron` directory with template files. |
 | [`up`](#up) | Start or restart the project's container, building the image if needed. |
 | [`stop`](#stop) | Stop the project's container. |
 | [`rm`](#rm) | Remove the project's container. |
@@ -37,6 +38,19 @@ Verifies that the environment is ready to use Cauldron:
 4. A throwaway container from `cauldron-base:latest` can run a simple command (`echo cauldron-check-ok`).
 
 If any step fails, the command exits with a non-zero status and prints the failure reason.
+
+## `init`
+
+```text
+cauldron init
+```
+
+Creates a `.cauldron` directory in the current project with template files:
+
+- `.cauldron/Dockerfile` – a starting Dockerfile with `FROM cauldron-base`.
+- `.cauldron/cauldron.toml` – a starting configuration file with an `[env]` section.
+
+If the files already exist, they are left untouched and a message is printed.
 
 ## `up`
 

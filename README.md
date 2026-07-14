@@ -9,13 +9,16 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 - Custom Dockerfiles layered on top of a Debian base image.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
 - Sensible defaults: project directory, `~/.gitconfig`, and SSH agent are available inside the container.
-- Commands for checking dependencies, starting/restarting, stopping, removing, listing, executing into, and opening VSCode in containers.
+- Commands for checking dependencies, initialising projects, starting/restarting, stopping, removing, listing, executing into, and opening VSCode in containers.
 
 ## Quick start
 
 ```bash
 # Verify Podman and image building work
 cauldron check
+
+# Create a .cauldron directory with template files for this project
+cauldron init
 
 # Start or restart the environment for the current project
 cauldron up

@@ -1,4 +1,5 @@
 import os
+import pathlib
 import sys
 
 import click
@@ -37,6 +38,49 @@ def check():
             raise click.ClickException(f"Check failed: {description}")
 
     click.echo("All checks passed.")
+
+
+DOCKERFILE_TEMPLATE = """FROM cauldron-base
+
+# Add project-specific packages and tools here.
+# These layers are built on top of the Cauldron base image.
+"""
+
+CONFIG_TEMPLATE = """# Cauldron project configuration.
+#
+# Use the [env] table to set environment variables inside the container.
+# PATH values may use ${PATH} as a placeholder for the image's default PATH.
+
+[env]
+# PATH = "/home/cauldron/.local/bin:${PATH}"
+"""
+
+
+@cli.command()
+def init():
+    """Create a .cauldron directory with template files for this project."""
+    cauldron_dir = pathlib.Path.cwd() / ".cauldron"
+
+    try:
+        cauldron_dir.mkdir(exist_ok=True)
+    except OSError as exc:
+        raise click.ClickException(f"Failed to create {cauldron_dir}: {exc}") from exc
+
+    rel_dir = cauldron_dir.relative_to(pathlib.Path.cwd())
+
+    dockerfile = cauldron_dir / "Dockerfile"
+    if dockerfile.exists():
+        click.echo(f"Keeping existing {rel_dir / 'Dockerfile'}")
+    else:
+        dockerfile.write_text(DOCKERFILE_TEMPLATE)
+        click.echo(f"Created {rel_dir / 'Dockerfile'}")
+
+    config_file = cauldron_dir / "cauldron.toml"
+    if config_file.exists():
+        click.echo(f"Keeping existing {rel_dir / 'cauldron.toml'}")
+    else:
+        config_file.write_text(CONFIG_TEMPLATE)
+        click.echo(f"Created {rel_dir / 'cauldron.toml'}")
 
 
 def _tty_flags():
