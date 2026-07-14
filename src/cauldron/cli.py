@@ -3,7 +3,7 @@ import sys
 
 import click
 
-from cauldron import podman, project
+from cauldron import podman, project, vscode
 
 
 @click.group(invoke_without_command=True)
@@ -225,4 +225,15 @@ def exec_command(name, command, args):
 @click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
 def code(name):
     """Open the project directory in VSCode Remote-Containers."""
-    raise NotImplementedError("code is not yet implemented")
+    container = project.container_name(override=name)
+    _start_project_container(container)
+
+    if not vscode.code_available():
+        raise click.ClickException(
+            "VSCode CLI ('code') not found. "
+            "Make sure VSCode is installed and 'code' is on your PATH."
+        )
+
+    project_dir = project.project_dir()
+    click.echo(f"Opening {project_dir} in VSCode...")
+    return vscode.open_in_code(container, project_dir)

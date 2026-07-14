@@ -306,3 +306,51 @@ def test_exec_starts_container_when_stopped(
     assert result.exit_code == 0
     mock_start.assert_called_once()
     mock_exec.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.vscode.code_available", return_value=False)
+def test_code_fails_when_code_cli_missing(
+    mock_code_available, mock_running, mock_exists
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["code"])
+    assert result.exit_code != 0
+    assert "VSCode CLI" in result.output
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.vscode.code_available", return_value=True)
+@patch("cauldron.vscode.open_in_code", return_value=0)
+def test_code_opens_project_in_vscode(
+    mock_open, mock_code_available, mock_running, mock_exists
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["code"])
+    assert result.exit_code == 0
+    mock_open.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.vscode.code_available", return_value=True)
+@patch("cauldron.vscode.open_in_code", return_value=0)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_code_auto_starts_container_when_not_exists(
+    mock_dockerfile,
+    mock_open,
+    mock_code_available,
+    mock_running,
+    mock_run,
+    mock_image,
+    mock_exists,
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["code"])
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    mock_open.assert_called_once()
