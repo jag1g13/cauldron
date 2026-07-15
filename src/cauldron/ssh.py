@@ -111,6 +111,7 @@ def _build_host_block(container):
         f"Host {container}\n"
         f"    User {_CONTAINER_USER}\n"
         "    IdentityFile ~/.config/cauldron/ssh/id_ed25519\n"
+        "    IdentitiesOnly yes\n"
         "    StrictHostKeyChecking no\n"
         "    UserKnownHostsFile /dev/null\n"
         f"    ProxyCommand podman exec -u 0 -i {container}"

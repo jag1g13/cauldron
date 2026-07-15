@@ -180,7 +180,7 @@ def build_project_image(tag, uid, gid, base_image=None):
     dockerfile_content = f"""ARG CAULDRON_BASE
 FROM ${{CAULDRON_BASE}}
 USER root
-RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron
+RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron
 RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /run/sshd /home/cauldron/.ssh && chown {uid}:{gid} /home/cauldron/.ssh && chmod 700 /home/cauldron/.ssh
 ENV HOME={CONTAINER_HOME}
