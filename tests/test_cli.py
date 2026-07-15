@@ -5,6 +5,7 @@ from click.testing import CliRunner
 
 from cauldron.cli import cli
 from cauldron import podman as podman_module
+from cauldron import ssh
 
 
 def test_cli_without_command_prints_help():
@@ -408,9 +409,18 @@ def test_code_fails_when_code_cli_missing(
 @patch("cauldron.podman.container_exists", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.vscode.code_available", return_value=True)
+@patch("cauldron.ssh.ensure_keypair")
+@patch("cauldron.ssh.ensure_container_ssh")
+@patch("cauldron.ssh.ensure_ssh_config")
 @patch("cauldron.vscode.open_in_code", return_value=0)
 def test_code_opens_project_in_vscode(
-    mock_open, mock_code_available, mock_running, mock_exists
+    mock_open,
+    mock_ssh_config,
+    mock_container_ssh,
+    mock_keypair,
+    mock_code_available,
+    mock_running,
+    mock_exists,
 ):
     runner = CliRunner()
     result = runner.invoke(cli, ["code"])
@@ -418,14 +428,26 @@ def test_code_opens_project_in_vscode(
     mock_open.assert_called_once()
     args, _kwargs = mock_open.call_args
     assert "cauldron-" in args[0]
+    mock_keypair.assert_called_once()
+    mock_container_ssh.assert_called_once()
+    mock_ssh_config.assert_called_once()
 
 
 @patch("cauldron.podman.container_exists", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.vscode.code_available", return_value=True)
+@patch("cauldron.ssh.ensure_keypair")
+@patch("cauldron.ssh.ensure_container_ssh")
+@patch("cauldron.ssh.ensure_ssh_config")
 @patch("cauldron.vscode.open_in_code", return_value=1)
 def test_code_propagates_nonzero_exit_code(
-    mock_open, mock_code_available, mock_running, mock_exists
+    mock_open,
+    mock_ssh_config,
+    mock_container_ssh,
+    mock_keypair,
+    mock_code_available,
+    mock_running,
+    mock_exists,
 ):
     runner = CliRunner()
     result = runner.invoke(cli, ["code"])
@@ -437,11 +459,17 @@ def test_code_propagates_nonzero_exit_code(
 @patch("cauldron.podman.run_container", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.vscode.code_available", return_value=True)
+@patch("cauldron.ssh.ensure_keypair")
+@patch("cauldron.ssh.ensure_container_ssh")
+@patch("cauldron.ssh.ensure_ssh_config")
 @patch("cauldron.vscode.open_in_code", return_value=0)
 @patch("cauldron.project.find_dockerfile", return_value=None)
 def test_code_auto_starts_container_when_not_exists(
     mock_dockerfile,
     mock_open,
+    mock_ssh_config,
+    mock_container_ssh,
+    mock_keypair,
     mock_code_available,
     mock_running,
     mock_run,
@@ -453,6 +481,26 @@ def test_code_auto_starts_container_when_not_exists(
     assert result.exit_code == 0
     mock_run.assert_called_once()
     mock_open.assert_called_once()
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.vscode.code_available", return_value=True)
+@patch("cauldron.ssh.ensure_keypair")
+@patch("cauldron.ssh.ensure_container_ssh", side_effect=ssh.SSHError("test error"))
+@patch("cauldron.ssh.ensure_ssh_config")
+def test_code_fails_when_ssh_setup_errors(
+    mock_ssh_config,
+    mock_container_ssh,
+    mock_keypair,
+    mock_code_available,
+    mock_running,
+    mock_exists,
+):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["code"])
+    assert result.exit_code != 0
+    assert "test error" in result.output
 
 
 def test_init_creates_cauldron_directory_and_templates():

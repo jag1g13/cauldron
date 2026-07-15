@@ -4,7 +4,7 @@ import sys
 
 import click
 
-from cauldron import config, podman, project, vscode
+from cauldron import config, podman, project, ssh, vscode
 
 
 def _read_data_file(name):
@@ -297,7 +297,7 @@ def exec_command(name, command, args):
 @cli.command()
 @click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
 def code(name):
-    """Open the project directory in VSCode Remote-Containers."""
+    """Open the project directory in VSCode via Remote-SSH."""
     container = project.container_name(override=name)
     _start_project_container(container)
 
@@ -306,6 +306,13 @@ def code(name):
             "VSCode CLI ('code') not found. "
             "Make sure VSCode is installed and 'code' is on your PATH."
         )
+
+    try:
+        ssh.ensure_keypair()
+        ssh.ensure_container_ssh(container)
+        ssh.ensure_ssh_config(container)
+    except ssh.SSHError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     project_dir = project.project_dir()
     click.echo(f"Opening {project_dir} in VSCode...")
