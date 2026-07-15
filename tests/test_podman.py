@@ -82,56 +82,42 @@ def test_image_id_returns_id_on_success():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = "sha256:abc123\n"
-        assert podman.image_id("cauldron-base:latest") == "sha256:abc123"
+        assert podman.image_id("debian:trixie-slim") == "sha256:abc123"
         mock_run.assert_called_once_with(
-            ["image", "inspect", "cauldron-base:latest", "-f", "{{.Id}}"]
+            ["image", "inspect", "debian:trixie-slim", "-f", "{{.Id}}"]
         )
 
 
 def test_image_id_returns_none_on_failure():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 1
-        assert podman.image_id("cauldron-base:latest") is None
+        assert podman.image_id("debian:trixie-slim") is None
 
 
-def test_ensure_base_image_returns_true_if_image_exists():
+def test_ensure_base_image_returns_true_if_default_image_exists():
     with patch("cauldron.podman.image_exists", return_value=True) as mock_exists:
         assert podman.ensure_base_image() is True
-        mock_exists.assert_called_once_with("cauldron-base:latest")
+        mock_exists.assert_called_once_with(podman.BASE_IMAGE)
 
 
-def test_ensure_base_image_pulls_and_tags_when_missing():
+def test_ensure_base_image_returns_true_if_configured_image_exists():
+    with patch("cauldron.podman.image_exists", return_value=True) as mock_exists:
+        assert podman.ensure_base_image("astral/uv:python3.14-trixie") is True
+        mock_exists.assert_called_once_with("astral/uv:python3.14-trixie")
+
+
+def test_ensure_base_image_pulls_default_when_missing():
     with patch("cauldron.podman.image_exists", return_value=False):
         with patch("cauldron.podman.pull", return_value=True) as mock_pull:
-            with patch("cauldron.podman.tag", return_value=True) as mock_tag:
-                assert podman.ensure_base_image() is True
-                mock_pull.assert_called_once_with(podman.BASE_IMAGE)
-                mock_tag.assert_called_once_with(
-                    podman.BASE_IMAGE, podman.LOCAL_BASE_TAG
-                )
+            assert podman.ensure_base_image() is True
+            mock_pull.assert_called_once_with(podman.BASE_IMAGE)
 
 
-def test_ensure_base_image_uses_configured_base_image():
+def test_ensure_base_image_pulls_configured_when_missing():
     with patch("cauldron.podman.image_exists", return_value=False):
         with patch("cauldron.podman.pull", return_value=True) as mock_pull:
-            with patch("cauldron.podman.tag", return_value=True) as mock_tag:
-                assert podman.ensure_base_image("astral/uv:python3.14-trixie") is True
-                mock_pull.assert_called_once_with("astral/uv:python3.14-trixie")
-                mock_tag.assert_called_once_with(
-                    "astral/uv:python3.14-trixie", podman.LOCAL_BASE_TAG
-                )
-
-
-def test_ensure_base_image_skips_pull_when_local_tag_matches_configured():
-    with patch("cauldron.podman.image_exists", return_value=True):
-        with patch(
-            "cauldron.podman.image_id", return_value="sha256:abc123"
-        ) as mock_image_id:
-            with patch("cauldron.podman.pull") as mock_pull:
-                assert podman.ensure_base_image("astral/uv:python3.14-trixie") is True
-                mock_image_id.assert_any_call("cauldron-base:latest")
-                mock_image_id.assert_any_call("astral/uv:python3.14-trixie")
-                mock_pull.assert_not_called()
+            assert podman.ensure_base_image("astral/uv:python3.14-trixie") is True
+            mock_pull.assert_called_once_with("astral/uv:python3.14-trixie")
 
 
 def test_ensure_base_image_fails_when_pull_fails():
@@ -140,12 +126,21 @@ def test_ensure_base_image_fails_when_pull_fails():
             assert podman.ensure_base_image() is False
 
 
-def test_run_test_container_returns_true_on_success():
+def test_run_test_container_uses_default_base_image():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
         assert podman.run_test_container() is True
         mock_run.assert_called_once_with(
-            ["run", "--rm", "cauldron-base:latest", "echo", "cauldron-check-ok"]
+            ["run", "--rm", podman.BASE_IMAGE, "echo", "cauldron-check-ok"]
+        )
+
+
+def test_run_test_container_uses_configured_base_image():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.run_test_container("astral/uv:python3.14-trixie") is True
+        mock_run.assert_called_once_with(
+            ["run", "--rm", "astral/uv:python3.14-trixie", "echo", "cauldron-check-ok"]
         )
 
 
@@ -161,11 +156,38 @@ def test_build_image_runs_podman_build():
         )
 
 
-def test_build_project_image_generates_dockerfile(tmp_path):
-    captured = {}
+def test_build_image_passes_build_args():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert (
+            podman.build_image(
+                "cauldron-foo:latest",
+                "/path/Dockerfile",
+                "/context",
+                build_args={"CAULDRON_BASE": "astral/uv:python3.14-trixie"},
+            )
+            is True
+        )
+        mock_run.assert_called_once_with(
+            [
+                "build",
+                "-t",
+                "cauldron-foo:latest",
+                "-f",
+                "/path/Dockerfile",
+                "--build-arg",
+                "CAULDRON_BASE=astral/uv:python3.14-trixie",
+                "/context",
+            ]
+        )
 
-    def capture_build(_tag, dockerfile, _context):
+
+def test_build_project_image_generates_dockerfile(tmp_path):
+    captured = {"args": None}
+
+    def capture_build(_tag, dockerfile, _context, build_args=None):
         captured["content"] = dockerfile.read_text()
+        captured["args"] = build_args
         return True
 
     with patch("cauldron.podman.build_image", side_effect=capture_build):
@@ -173,17 +195,20 @@ def test_build_project_image_generates_dockerfile(tmp_path):
             podman.build_project_image("cauldron-proj:latest", "1000", "1000") is True
         )
         content = captured["content"]
-        assert "FROM cauldron-base:latest" in content
+        assert "ARG CAULDRON_BASE" in content
+        assert "FROM ${CAULDRON_BASE}" in content
         assert "groupadd -g 1000 -o cauldron" in content
         assert "useradd -m -u 1000 -g 1000 -o cauldron" in content
         assert "HOME=/home/cauldron" in content
+        assert captured["args"] == {"CAULDRON_BASE": podman.BASE_IMAGE}
 
 
-def test_build_project_image_uses_intermediate_base():
-    captured = {}
+def test_build_project_image_uses_configured_base():
+    captured = {"args": None}
 
-    def capture_build(_tag, dockerfile, _context):
+    def capture_build(_tag, dockerfile, _context, build_args=None):
         captured["content"] = dockerfile.read_text()
+        captured["args"] = build_args
         return True
 
     with patch("cauldron.podman.build_image", side_effect=capture_build):
@@ -196,7 +221,10 @@ def test_build_project_image_uses_intermediate_base():
             )
             is True
         )
-        assert "FROM cauldron-proj-intermediate:latest" in captured["content"]
+        assert "FROM ${CAULDRON_BASE}" in captured["content"]
+        assert captured["args"] == {
+            "CAULDRON_BASE": "cauldron-proj-intermediate:latest"
+        }
 
 
 def test_container_exists_returns_true_when_container_present():
@@ -341,25 +369,6 @@ def test_run_container_mounts_defaults():
         assert args[-2:] == ["sleep", "infinity"]
 
 
-def test_run_container_mounts_gitconfig_and_ssh_agent():
-    with patch("cauldron.podman._run") as mock_run:
-        mock_run.return_value.returncode = 0
-        podman.run_container(
-            name="cauldron-foo",
-            image="cauldron-foo:latest",
-            workdir="/home/deck/projects/foo",
-            project_dir="/home/deck/projects/foo",
-            uid="1000",
-            gid="1000",
-            gitconfig="/home/deck/.gitconfig",
-            ssh_auth_sock="/run/user/1000/keyring/ssh",
-        )
-        args = mock_run.call_args[0][0]
-        assert "/home/deck/.gitconfig:/home/cauldron/.gitconfig:ro,Z" in args
-        assert "/run/user/1000/keyring/ssh:/run/user/1000/keyring/ssh:ro" in args
-        assert "SSH_AUTH_SOCK=/run/user/1000/keyring/ssh" in args
-
-
 def test_run_container_adds_project_label():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
@@ -374,6 +383,122 @@ def test_run_container_adds_project_label():
         args = mock_run.call_args[0][0]
         assert "--label" in args
         assert "cauldron.project_dir=/home/deck/projects/foo" in args
+
+
+def test_run_container_mounts_extra_volumes():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            mounts=[
+                {"source": "/host/extra", "target": "/extra", "options": "ro"},
+                {"source": "/host/cache", "target": "/cache"},
+            ],
+        )
+        args = mock_run.call_args[0][0]
+        assert "/host/extra:/extra:ro" in args
+        assert "/host/cache:/cache" in args
+
+
+def test_run_container_publishes_ports():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            ports=["8080:8080", "127.0.0.1:3000:3000"],
+        )
+        args = mock_run.call_args[0][0]
+        assert "-p" in args
+        assert "8080:8080" in args
+        assert "127.0.0.1:3000:3000" in args
+
+
+def test_run_container_adds_known_hosts():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            known_hosts=["my-service.local:127.0.0.1", "registry.internal:10.0.0.5"],
+        )
+        args = mock_run.call_args[0][0]
+        assert "--add-host" in args
+        assert "my-service.local:127.0.0.1" in args
+        assert "registry.internal:10.0.0.5" in args
+
+
+def test_run_container_warns_when_selinux_enabled_and_no_label():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        with patch("cauldron.podman._selinux_enabled", return_value=True):
+            with pytest.warns(UserWarning, match="SELinux relabel option"):
+                podman.run_container(
+                    name="cauldron-foo",
+                    image="cauldron-foo:latest",
+                    workdir="/home/deck/projects/foo",
+                    project_dir="/home/deck/projects/foo",
+                    uid="1000",
+                    gid="1000",
+                    mounts=[
+                        {"source": "/host/extra", "target": "/extra", "options": "ro"},
+                    ],
+                )
+
+
+def test_run_container_does_not_warn_when_selinux_label_present():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        with patch("cauldron.podman._selinux_enabled", return_value=True):
+            with patch("warnings.warn") as mock_warn:
+                podman.run_container(
+                    name="cauldron-foo",
+                    image="cauldron-foo:latest",
+                    workdir="/home/deck/projects/foo",
+                    project_dir="/home/deck/projects/foo",
+                    uid="1000",
+                    gid="1000",
+                    mounts=[
+                        {
+                            "source": "/host/extra",
+                            "target": "/extra",
+                            "options": "ro,Z",
+                        },
+                    ],
+                )
+                mock_warn.assert_not_called()
+
+
+def test_run_container_does_not_warn_when_selinux_disabled():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        with patch("cauldron.podman._selinux_enabled", return_value=False):
+            with patch("warnings.warn") as mock_warn:
+                podman.run_container(
+                    name="cauldron-foo",
+                    image="cauldron-foo:latest",
+                    workdir="/home/deck/projects/foo",
+                    project_dir="/home/deck/projects/foo",
+                    uid="1000",
+                    gid="1000",
+                    mounts=[
+                        {"source": "/host/extra", "target": "/extra", "options": "ro"},
+                    ],
+                )
+                mock_warn.assert_not_called()
 
 
 def test_start_container_runs_podman_start():

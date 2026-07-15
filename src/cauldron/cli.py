@@ -1,9 +1,15 @@
+import importlib.resources
 import pathlib
 import sys
 
 import click
 
 from cauldron import config, podman, project, vscode
+
+
+def _read_data_file(name):
+    """Return the text of a reference file shipped with Cauldron."""
+    return importlib.resources.files("cauldron.data").joinpath(name).read_text()
 
 
 @click.group(invoke_without_command=True)
@@ -27,7 +33,7 @@ def check():
     steps = [
         ("podman is installed", podman.version),
         ("base image is available", lambda: podman.ensure_base_image(base_image)),
-        ("test container can run", podman.run_test_container),
+        ("test container can run", lambda: podman.run_test_container(base_image)),
     ]
 
     for description, step in steps:
@@ -39,26 +45,6 @@ def check():
             raise click.ClickException(f"Check failed: {description}")
 
     click.echo("All checks passed.")
-
-
-DOCKERFILE_TEMPLATE = """FROM cauldron-base
-
-# Add project-specific packages and tools here.
-# These layers are built on top of the Cauldron base image.
-"""
-
-CONFIG_TEMPLATE = """# Cauldron project configuration.
-#
-# Use the [container] table to customise the container image.
-# Use the [env] table to set environment variables inside the container.
-# PATH values may use ${PATH} as a placeholder for the image's default PATH.
-
-[container]
-# base_image = "astral/uv:python3.14-trixie"
-
-[env]
-# PATH = "/home/cauldron/.local/bin:${PATH}"
-"""
 
 
 @cli.command()
@@ -77,14 +63,14 @@ def init():
     if dockerfile.exists():
         click.echo(f"Keeping existing {rel_dir / 'Dockerfile'}")
     else:
-        dockerfile.write_text(DOCKERFILE_TEMPLATE)
+        dockerfile.write_text(_read_data_file("Dockerfile"))
         click.echo(f"Created {rel_dir / 'Dockerfile'}")
 
     config_file = cauldron_dir / "cauldron.toml"
     if config_file.exists():
         click.echo(f"Keeping existing {rel_dir / 'cauldron.toml'}")
     else:
-        config_file.write_text(CONFIG_TEMPLATE)
+        config_file.write_text(_read_data_file("cauldron.toml"))
         click.echo(f"Created {rel_dir / 'cauldron.toml'}")
 
 
@@ -158,7 +144,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             )
     elif build or not podman.image_exists(image):
         click.echo("Building project image...")
-        if not podman.ensure_base_image(base_image):
+        resolved_base = base_image or podman.BASE_IMAGE
+        if not podman.ensure_base_image(resolved_base):
             raise click.ClickException("Failed to ensure base image.")
 
         dockerfile = project.find_dockerfile()
@@ -166,12 +153,18 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         if dockerfile:
             intermediate = f"{image.split(':')[0]}-intermediate:latest"
             click.echo(f"Building intermediate image from {dockerfile}...")
-            if not podman.build_image(intermediate, dockerfile, dockerfile.parent):
+            if not podman.build_image(
+                intermediate,
+                dockerfile,
+                dockerfile.parent,
+                build_args={"CAULDRON_BASE": resolved_base},
+            ):
                 raise click.ClickException(
                     f"Failed to build intermediate image from {dockerfile}."
                 )
 
-        if not podman.build_project_image(image, uid, gid, intermediate):
+        project_base = intermediate or resolved_base
+        if not podman.build_project_image(image, uid, gid, project_base):
             raise click.ClickException("Failed to build project image.")
 
     click.echo(f"Starting container {container}...")
@@ -183,9 +176,10 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         project_dir=project_dir,
         uid=uid,
         gid=gid,
-        gitconfig=project.gitconfig_path(),
-        ssh_auth_sock=project.ssh_auth_sock(),
         env=container_env,
+        mounts=config.container_mounts(cfg),
+        ports=config.container_ports(cfg),
+        known_hosts=config.container_known_hosts(cfg),
     ):
         raise click.ClickException(f"Failed to start container {container}.")
 

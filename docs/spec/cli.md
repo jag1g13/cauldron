@@ -34,8 +34,8 @@ Verifies that the environment is ready to use Cauldron:
 
 1. Podman is installed and runnable (`podman version`).
 2. The base image `debian:trixie-slim` can be pulled.
-3. The local `cauldron-base:latest` image can be built if needed.
-4. A throwaway container from `cauldron-base:latest` can run a simple command (`echo cauldron-check-ok`).
+3. The base image is available locally.
+4. A throwaway container from the base image can run a simple command (`echo cauldron-check-ok`).
 
 If any step fails, the command exits with a non-zero status and prints the failure reason.
 
@@ -47,8 +47,8 @@ cauldron init
 
 Creates a `.cauldron` directory in the current project with template files:
 
-- `.cauldron/Dockerfile` – a starting Dockerfile with `FROM cauldron-base`.
-- `.cauldron/cauldron.toml` – a starting configuration file with an `[env]` section.
+- `.cauldron/Dockerfile` – a starting Dockerfile with `ARG CAULDRON_BASE` and `FROM ${CAULDRON_BASE}`.
+- `.cauldron/cauldron.toml` – a starting configuration file with `[container]` and `[env]` sections, including commented examples for Git and SSH agent passthrough and known-hosts entries.
 
 If the files already exist, they are left untouched and a message is printed.
 
@@ -70,10 +70,11 @@ Ensures the project's container is running. If the container does not exist, the
 
 ### Behaviour
 
-- The project image is built from the custom Dockerfile (if any) on top of `cauldron-base:latest`.
+- The project image is built from the custom Dockerfile (if any) on top of the configured base image, using the `CAULDRON_BASE` build argument.
 - If a container with the chosen name already exists, it is restarted.
 - With `--build`, the existing container is removed so it can be recreated from the rebuilt image.
-- The current working directory, `~/.gitconfig`, and `SSH_AUTH_SOCK` are mounted as described in the overview.
+- The current working directory is mounted read/write as described in the overview.
+- Additional `[container] mounts`, `[container] ports`, and `[container] known_hosts` from the configuration are applied to the container, including any Git or SSH agent mounts declared by the user.
 
 ## `stop`
 
@@ -203,3 +204,8 @@ cauldron code
 cauldron stop
 cauldron rm
 ```
+
+## See also
+
+- [Architecture and design](overview.md)
+- [Configuration reference](config.md)

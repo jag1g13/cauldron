@@ -4,11 +4,11 @@ import subprocess
 import sys
 import tempfile
 import threading
+import warnings
 
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
-LOCAL_BASE_TAG = "cauldron-base:latest"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
 
@@ -126,62 +126,59 @@ def image_env(image):
 
 
 def ensure_base_image(base_image=None):
-    """Ensure cauldron-base:latest exists, pulling and tagging if necessary.
+    """Ensure the base image exists locally, pulling it if necessary.
 
     If ``base_image`` is provided, it is used instead of the default base
-    image. When the local tag already exists and a custom base image is
-    requested, the local tag is only reused if it points to the same image.
+    image. The image is no longer re-tagged as ``cauldron-base:latest``; the
+    original image reference is used directly and passed to builds via the
+    ``CAULDRON_BASE`` build argument.
     """
     base = base_image or BASE_IMAGE
-    if image_exists(LOCAL_BASE_TAG):
-        if base_image is None:
-            return True
-        local_id = image_id(LOCAL_BASE_TAG)
-        base_id = image_id(base)
-        if local_id and base_id and local_id == base_id:
-            return True
-    if not pull(base):
-        return False
-    return tag(base, LOCAL_BASE_TAG)
+    if image_exists(base):
+        return True
+    return pull(base)
 
 
-def run_test_container():
+def run_test_container(base_image=None):
     """Run a throwaway container from the base image to verify it works."""
-    return (
-        _run(["run", "--rm", LOCAL_BASE_TAG, "echo", "cauldron-check-ok"]).returncode
-        == 0
-    )
+    base = base_image or BASE_IMAGE
+    return _run(["run", "--rm", base, "echo", "cauldron-check-ok"]).returncode == 0
 
 
-def build_image(tag, dockerfile, context):
+def build_image(tag, dockerfile, context, build_args=None):
     """Build an image from a Dockerfile and tag it.
+
+    ``build_args`` is an optional dictionary of build arguments passed to
+    Podman as ``--build-arg key=value``.
 
     Returns True on success.
     """
-    result = _run(
-        [
-            "build",
-            "-t",
-            tag,
-            "-f",
-            str(dockerfile),
-            str(context),
-        ]
-    )
+    args = [
+        "build",
+        "-t",
+        tag,
+        "-f",
+        str(dockerfile),
+    ]
+    for key, value in (build_args or {}).items():
+        args.extend(["--build-arg", f"{key}={value}"])
+    args.append(str(context))
+    result = _run(args)
     return result.returncode == 0
 
 
-def build_project_image(tag, uid, gid, intermediate_tag=None):
+def build_project_image(tag, uid, gid, base_image=None):
     """Build the final project image with the host user configured.
 
-    If intermediate_tag is provided, it is used as the base image; otherwise
-    cauldron-base:latest is used. The resulting image creates a user matching
-    the host UID/GID and sets HOME to /home/cauldron.
+    The base image is supplied through the ``CAULDRON_BASE`` build argument.
+    The resulting image creates a user matching the host UID/GID and sets
+    HOME to /home/cauldron.
 
     Returns True on success.
     """
-    base = intermediate_tag or LOCAL_BASE_TAG
-    dockerfile_content = f"""FROM {base}
+    base = base_image or BASE_IMAGE
+    dockerfile_content = f"""ARG CAULDRON_BASE
+FROM ${{CAULDRON_BASE}}
 USER root
 RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron
 ENV HOME={CONTAINER_HOME}
@@ -189,7 +186,7 @@ ENV HOME={CONTAINER_HOME}
     with tempfile.TemporaryDirectory() as tmpdir:
         dockerfile = pathlib.Path(tmpdir) / "Dockerfile"
         dockerfile.write_text(dockerfile_content)
-        return build_image(tag, dockerfile, tmpdir)
+        return build_image(tag, dockerfile, tmpdir, build_args={"CAULDRON_BASE": base})
 
 
 def container_exists(name):
@@ -213,6 +210,28 @@ def container_running(name):
     return result.stdout.strip().lower() == "true"
 
 
+def _selinux_enabled():
+    """Return True if SELinux is installed and currently enforcing/permissive."""
+    try:
+        result = subprocess.run(["selinuxenabled"], capture_output=True, text=True)
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _has_selinux_option(options):
+    """Return True if options contains an SELinux relabel option (z or Z)."""
+    return any(opt in ("z", "Z") for opt in options.split(","))
+
+
+def _format_mount_spec(mount):
+    """Format a normalized mount dict as a Podman -v argument."""
+    options = mount.get("options", "")
+    if options:
+        return f"{mount['source']}:{mount['target']}:{options}"
+    return f"{mount['source']}:{mount['target']}"
+
+
 def run_container(
     name,
     image,
@@ -220,14 +239,23 @@ def run_container(
     project_dir,
     uid,
     gid,
-    gitconfig=None,
-    ssh_auth_sock=None,
     env=None,
+    mounts=None,
+    ports=None,
+    known_hosts=None,
 ):
     """Create and start a detached container with the standard mounts.
 
     The optional ``env`` dict sets extra environment variables. If a PATH
     value contains ``${PATH}``, it is expanded with the image's default PATH.
+
+    ``mounts`` is a list of dicts with ``source``, ``target`` and ``options``.
+    ``ports`` is a list of strings in Podman's ``-p`` syntax.
+    ``known_hosts`` is a list of strings in ``hostname:ip`` format, passed to
+    Podman's ``--add-host`` flag.
+
+    Git configuration and SSH agent forwarding are no longer handled here;
+    add them as ordinary mounts and environment variables in the config file.
 
     Returns True on success.
     """
@@ -250,12 +278,21 @@ def run_container(
 
     args.extend(["-e", f"HOME={CONTAINER_HOME}"])
 
-    if gitconfig:
-        args.extend(["-v", f"{gitconfig}:{CONTAINER_HOME}/.gitconfig:ro,Z"])
+    selinux = _selinux_enabled()
+    for mount in mounts or []:
+        spec = _format_mount_spec(mount)
+        args.extend(["-v", spec])
+        if selinux and not _has_selinux_option(mount.get("options", "")):
+            warnings.warn(
+                f"Mount {mount['target']!r} has no SELinux relabel option "
+                "(z/Z); add it to options if files are not accessible"
+            )
 
-    if ssh_auth_sock:
-        args.extend(["-v", f"{ssh_auth_sock}:{ssh_auth_sock}:ro"])
-        args.extend(["-e", f"SSH_AUTH_SOCK={ssh_auth_sock}"])
+    for port in ports or []:
+        args.extend(["-p", port])
+
+    for entry in known_hosts or []:
+        args.extend(["--add-host", entry])
 
     env = env or {}
     if "PATH" in env and "${PATH}" in env["PATH"]:

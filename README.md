@@ -6,9 +6,9 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 
 - Rootless Podman containers.
 - Per-project environments identified by directory name.
-- Custom Dockerfiles layered on top of a Debian base image.
+- Custom Dockerfiles layered on top of the configured base image via the `CAULDRON_BASE` build argument.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
-- Sensible defaults: project directory, `~/.gitconfig`, and SSH agent are available inside the container.
+- Additional mounts, port forwards, and known-hosts entries declared in the config file.
 - Commands for checking dependencies, initialising projects, starting/restarting, stopping, removing, listing, executing into, and opening VSCode in containers.
 
 ## Quick start
@@ -46,7 +46,7 @@ Use the `[container]` table to override the default Debian base image. This is u
 base_image = "astral/uv:python3.14-trixie"
 ```
 
-The image is pulled and tagged locally as `cauldron-base:latest` before the project image is built.
+The image is passed to the build as the `CAULDRON_BASE` build argument, so custom Dockerfiles can use `FROM ${CAULDRON_BASE}`.
 
 ### Environment variables
 
@@ -60,10 +60,69 @@ EDITOR = "vim"
 
 `${PATH}` is expanded to the image's default `PATH` when the container starts.
 
+### Mounts
+
+Use the `[container]` table to mount additional files or directories into the container. Each mount needs a `source`, `target`, and optional `options`. You can also use Docker's short syntax: `"/host/path:/container/path:ro,Z"`.
+
+```toml
+[container]
+mounts = [
+  {source = "/home/deck/.aws", target = "/home/cauldron/.aws", options = "ro"},
+  {source = "/var/cache", target = "/cache", options = "rw"},
+]
+```
+
+Project mounts override global mounts when they share the same `target`. If SELinux is enabled on the host and a mount does not include the `z` or `Z` option, Cauldron warns you so you can add it.
+
+### Ports
+
+Use the `[container]` table to publish ports from the container to the host.
+
+```toml
+[container]
+ports = [
+  "8080:8080",
+  "127.0.0.1:3000:3000",
+]
+```
+
+Project ports override global ports when they refer to the same host port.
+
+### Known hosts
+
+Use the `[container]` table to append entries to the container's `/etc/hosts` file for custom domain resolution.
+
+```toml
+[container]
+known_hosts = [
+  "my-service.local:127.0.0.1",
+]
+```
+
+Each entry is a `hostname:ip` pair passed to Podman's `--add-host` flag. Project entries override global entries for the same hostname.
+
+### Git and SSH agent passthrough
+
+Git configuration and SSH agent forwarding are no longer handled specially by Cauldron. Add them as ordinary mounts and environment variables in your config file. `cauldron init` creates a reference config that includes commented examples for `~/.gitconfig` and `SSH_AUTH_SOCK`.
+
+Host environment variables (e.g. `$HOME`, `$SSH_AUTH_SOCK`) are expanded in mount paths and env values, so you don't need to hard-code paths:
+
+```toml
+[container]
+mounts = [
+  {source = "$HOME/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
+  {source = "$SSH_AUTH_SOCK", target = "$SSH_AUTH_SOCK", options = "ro"},
+]
+
+[env]
+SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
+```
+
 ## Documentation
 
 - [Architecture and design](docs/spec/overview.md)
 - [CLI reference](docs/spec/cli.md)
+- [Configuration reference](docs/spec/config.md)
 
 ## Status
 
