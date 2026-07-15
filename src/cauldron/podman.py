@@ -180,7 +180,9 @@ def build_project_image(tag, uid, gid, base_image=None):
     dockerfile_content = f"""ARG CAULDRON_BASE
 FROM ${{CAULDRON_BASE}}
 USER root
-RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron
+RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /run/sshd /home/cauldron/.ssh && chown {uid}:{gid} /home/cauldron/.ssh && chmod 700 /home/cauldron/.ssh
 ENV HOME={CONTAINER_HOME}
 """
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -359,6 +361,51 @@ def exec_in_container(name, command, args=None, interactive=False, tty=False):
         return subprocess.run(cmd).returncode
     except FileNotFoundError:
         return 1
+
+
+def exec_check(name, command, user=None):
+    """Return True if a command succeeds in the container, False otherwise.
+
+    ``command`` is a list of arguments. ``user`` optionally overrides the
+    container user (e.g. ``"0"`` for root).
+    """
+    args = ["podman", "exec"]
+    if user:
+        args.extend(["-u", user])
+    args.append(name)
+    args.extend(command)
+    try:
+        return subprocess.run(args, capture_output=True, text=True).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def exec_capture(name, command, user=None):
+    """Run a command in a container and return stdout, or None on failure."""
+    args = ["podman", "exec"]
+    if user:
+        args.extend(["-u", user])
+    args.append(name)
+    args.extend(command)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True)
+        return result.stdout.strip() if result.returncode == 0 else None
+    except FileNotFoundError:
+        return None
+
+
+def exec_with_stdin(name, command, input_text, user=None):
+    """Run a command in a container, feeding stdin. Returns True on success."""
+    args = ["podman", "exec", "-i"]
+    if user:
+        args.extend(["-u", user])
+    args.append(name)
+    args.extend(command)
+    try:
+        result = subprocess.run(args, input=input_text, capture_output=True, text=True)
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 def remove_container(name, force=False):

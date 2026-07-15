@@ -15,7 +15,7 @@ Cauldron is a Python/Click command-line tool that creates and manages containeri
 - Replacing or fully emulating the Dev Containers specification.
 - Supporting Docker directly (rootless behaviour is harder to guarantee).
 - Multi-container orchestration or production deployment.
-- Built-in IDE integration beyond VSCode Remote-Containers.
+- Built-in IDE integration beyond VSCode Remote-SSH.
 
 ## Architecture
 
@@ -59,7 +59,7 @@ If the project image already exists, it is reused unless `cauldron up --build` i
 - `stop` stops only the container for the current directory (or the one named by `--name`).
 - `rm` removes only the stopped container for the current directory. `rm --force` stops a running container first.
 - `ps` lists only Cauldron-managed containers.
-- `exec` and `code` require a running container; if the target container is not running, they start it first.
+- `exec` and `code` require a running container; if the target container is not running, they start it first. `code` also sets up SSH (key pair, authorized_keys, host keys, and SSH config) for VSCode Remote-SSH connectivity.
 
 ## Defaults inside the container
 

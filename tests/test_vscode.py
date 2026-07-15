@@ -14,22 +14,16 @@ def test_code_unavailable_when_not_on_path():
         assert vscode.code_available() is False
 
 
-def test_build_remote_uri_uses_hex_encoded_json():
+def test_build_remote_uri_uses_ssh_remote_scheme():
     uri = vscode.build_remote_uri("cauldron-foo", "/home/deck/projects/foo")
-    assert uri.startswith("vscode-remote://attached-container+")
+    assert uri.startswith("vscode-remote://ssh-remote+")
     assert "/home/deck/projects/foo" in uri
-    # Authority should be hex, not the plain name
-    assert "cauldron-foo" not in uri.split("/")[2]
 
 
-def test_build_remote_uri_payload_contains_container_name():
-    import binascii
-
+def test_build_remote_uri_includes_host_in_authority():
     uri = vscode.build_remote_uri("cauldron-foo", "/home/deck/projects/foo")
     authority = uri.split("/")[2]
-    encoded = authority.split("+")[1]
-    payload = binascii.unhexlify(encoded).decode("utf-8")
-    assert '"containerName": "cauldron-foo"' in payload
+    assert "cauldron-foo" in authority
 
 
 def test_build_remote_uri_encodes_special_characters():

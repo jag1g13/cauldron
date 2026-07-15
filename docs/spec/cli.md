@@ -22,7 +22,7 @@ Options that apply to individual commands (for example `--name`) are listed unde
 | [`rm`](#rm) | Remove the project's container. |
 | [`ps`](#ps) | List Cauldron-managed containers. |
 | [`exec`](#exec) | Open a shell or run a command in the project's container, starting it if needed. |
-| [`code`](#code) | Open the project directory in VSCode Remote-Containers, starting the container if needed. |
+| [`code`](#code) | Open the project directory in VSCode via Remote-SSH, starting the container if needed. |
 
 ## `check`
 
@@ -156,7 +156,7 @@ Runs a command inside the project's container. If the container is not running, 
 cauldron code [OPTIONS]
 ```
 
-Opens the current project directory in VSCode using the Remote-Containers extension. If the container is not running, it is started first.
+Opens the current project directory in VSCode using the Remote-SSH extension. If the container is not running, it is started first.
 
 ### Options
 
@@ -167,9 +167,12 @@ Opens the current project directory in VSCode using the Remote-Containers extens
 ### Requirements
 
 - The `code` CLI is installed on the host.
-- VSCode's Remote-Containers extension is installed.
+- VSCode's Remote-SSH extension is installed.
+- OpenSSH is installed on the host (`ssh-keygen` must be available).
 
-Cauldron invokes VSCode with a `vscode-remote://attached-container+<container_name>/<workdir>` URI, opening the mounted project directory. The exact URI scheme may be adjusted to match the installed VSCode/Remote-Containers version.
+Cauldron generates an ed25519 key pair at `~/.config/cauldron/ssh/`, installs the public key into the container, and writes an SSH config entry with a `ProxyCommand` that spawns `sshd -i` (inetd mode) inside the container via `podman exec`. No port allocation is needed. VSCode is launched with a `vscode-remote://ssh-remote+<container_name>/<workdir>` URI.
+
+Existing images built before this feature lack openssh-server; rebuild with `cauldron up --build` before using `cauldron code`.
 
 ## Exit codes
 

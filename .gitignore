@@ -5,5 +5,8 @@ __pycache__/
 # Packaging
 *.egg-info/
 
+# Build artifacts
+build/
+
 # Development environment
 .cauldron/
