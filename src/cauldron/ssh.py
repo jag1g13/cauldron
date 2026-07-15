@@ -63,9 +63,7 @@ def ensure_keypair():
         text=True,
     )
     if result.returncode != 0:
-        raise SSHError(
-            f"Failed to generate SSH key pair: {result.stderr.strip()}"
-        )
+        raise SSHError(f"Failed to generate SSH key pair: {result.stderr.strip()}")
 
 
 def read_public_key():
@@ -171,11 +169,7 @@ def _ensure_include_in_user_config():
     if INCLUDE_MARKER_BEGIN in existing:
         return
 
-    new_block = (
-        f"{INCLUDE_MARKER_BEGIN}\n"
-        f"Include {SSH_CONFIG}\n"
-        f"{INCLUDE_MARKER_END}\n"
-    )
+    new_block = f"{INCLUDE_MARKER_BEGIN}\nInclude {SSH_CONFIG}\n{INCLUDE_MARKER_END}\n"
     updated = new_block + existing
 
     USER_SSH_CONFIG.write_text(updated)

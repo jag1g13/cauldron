@@ -402,9 +402,7 @@ def exec_with_stdin(name, command, input_text, user=None):
     args.append(name)
     args.extend(command)
     try:
-        result = subprocess.run(
-            args, input=input_text, capture_output=True, text=True
-        )
+        result = subprocess.run(args, input=input_text, capture_output=True, text=True)
         return result.returncode == 0
     except FileNotFoundError:
         return False
