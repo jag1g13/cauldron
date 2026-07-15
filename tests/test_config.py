@@ -196,6 +196,39 @@ def test_container_mounts_returns_empty_when_missing():
     assert config.container_mounts({}) == []
 
 
+def test_container_mounts_expands_host_vars(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/deck")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/1000/keyring/ssh")
+    cfg = {
+        "container": {
+            "mounts": [
+                {"source": "$HOME/.gitconfig", "target": "/home/cauldron/.gitconfig", "options": "ro,Z"},
+                {"source": "$SSH_AUTH_SOCK", "target": "$SSH_AUTH_SOCK", "options": "ro"},
+            ]
+        }
+    }
+    mounts = config.container_mounts(cfg)
+    assert mounts[0]["source"] == "/home/deck/.gitconfig"
+    assert mounts[0]["target"] == "/home/cauldron/.gitconfig"
+    assert mounts[1]["source"] == "/run/user/1000/keyring/ssh"
+    assert mounts[1]["target"] == "/run/user/1000/keyring/ssh"
+
+
+def test_container_env_expands_host_vars(monkeypatch):
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/1000/keyring/ssh")
+    cfg = {"env": {"SSH_AUTH_SOCK": "$SSH_AUTH_SOCK", "EDITOR": "vim"}}
+    assert config.container_env(cfg) == {
+        "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+        "EDITOR": "vim",
+    }
+
+
+def test_container_env_does_not_expand_path(monkeypatch):
+    monkeypatch.setenv("PATH", "/host/bin")
+    cfg = {"env": {"PATH": "/home/cauldron/.local/bin:${PATH}"}}
+    assert config.container_env(cfg) == {"PATH": "/home/cauldron/.local/bin:${PATH}"}
+
+
 def test_load_config_merges_container_ports(tmp_path, monkeypatch):
     global_file = tmp_path / "home" / "cauldron.toml"
     global_file.parent.mkdir()

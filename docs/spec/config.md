@@ -50,6 +50,8 @@ mounts = [
 - `target` — the path inside the container.
 - `options` — Podman mount options, for example `ro`, `rw`, `Z`, `z`, `rw,Z`. Optional.
 
+Host environment variables (e.g. `$HOME`, `$SSH_AUTH_SOCK`) are expanded in both `source` and `target` paths, so config files can use portable paths without hard-coding the user's home directory or UID.
+
 Global and project mounts are merged by `target`. If a project mount has the same target as a global one, the project mount wins and Cauldron emits a warning. Duplicates within the same file are also warned about.
 
 When SELinux is installed and enabled on the host, Cauldron warns if a mount's options do not include the `z` or `Z` relabel option. This is a warning, not an error; if the container cannot access the mounted files, add `Z` (private unshared) or `z` (shared) to the options.
@@ -73,18 +75,20 @@ Each entry is a string in Podman's `-p` syntax. Global and project ports are mer
 
 Git configuration and SSH agent forwarding are configured as ordinary mounts and environment variables, not as hard-coded behaviour.
 
+Host environment variables are expanded in mount paths and env values, so you can use `$HOME` and `$SSH_AUTH_SOCK` instead of hard-coding paths:
+
 ```toml
 [container]
 mounts = [
-  {source = "/home/deck/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
-  {source = "/run/user/1000/keyring/ssh", target = "/run/user/1000/keyring/ssh", options = "ro"},
+  {source = "$HOME/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
+  {source = "$SSH_AUTH_SOCK", target = "$SSH_AUTH_SOCK", options = "ro"},
 ]
 
 [env]
-SSH_AUTH_SOCK = "/run/user/1000/keyring/ssh"
+SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
 ```
 
-`cauldron init` writes a reference `.cauldron/cauldron.toml` with commented examples for these mounts. Uncomment them and adjust the host paths to match your system.
+`cauldron init` writes a reference `.cauldron/cauldron.toml` with commented examples for these mounts. Uncomment them to enable passthrough.
 
 ### `[env]` — environment variables
 
@@ -97,7 +101,7 @@ EDITOR = "vim"
 PORT = 8080
 ```
 
-Values are passed as strings. `PATH` values may use `${PATH}` as a placeholder; Cauldron expands it to the image's default `PATH` when starting the container. Other variables are passed through literally. Project env values override global env values at the key level.
+Values are passed as strings. `PATH` values may use `${PATH}` as a placeholder; Cauldron expands it to the image's default `PATH` when starting the container. Host environment variables (e.g. `$HOME`, `$SSH_AUTH_SOCK`) are expanded in all other env values. Project env values override global env values at the key level.
 
 ## Example project config
 

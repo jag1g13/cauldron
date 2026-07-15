@@ -92,15 +92,17 @@ Project ports override global ports when they refer to the same host port.
 
 Git configuration and SSH agent forwarding are no longer handled specially by Cauldron. Add them as ordinary mounts and environment variables in your config file. `cauldron init` creates a reference config that includes commented examples for `~/.gitconfig` and `SSH_AUTH_SOCK`.
 
+Host environment variables (e.g. `$HOME`, `$SSH_AUTH_SOCK`) are expanded in mount paths and env values, so you don't need to hard-code paths:
+
 ```toml
 [container]
 mounts = [
-  {source = "/home/deck/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
-  {source = "/run/user/1000/keyring/ssh", target = "/run/user/1000/keyring/ssh", options = "ro"},
+  {source = "$HOME/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
+  {source = "$SSH_AUTH_SOCK", target = "$SSH_AUTH_SOCK", options = "ro"},
 ]
 
 [env]
-SSH_AUTH_SOCK = "/run/user/1000/keyring/ssh"
+SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
 ```
 
 ## Documentation

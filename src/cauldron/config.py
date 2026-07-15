@@ -1,8 +1,22 @@
+import os
 import pathlib
 import tomllib
 import warnings
 
 from cauldron.project import CONFIG_GLOBAL_PATH, CONFIG_PROJECT_PATH
+
+
+def _expand_host_vars(value):
+    """Expand host environment variables in a string.
+
+    ``$HOME``, ``${HOME}``, ``$SSH_AUTH_SOCK`` and similar references are
+    replaced with the corresponding values from the host environment. This
+    lets config files use portable paths without hard-coding the user's
+    home directory or UID.
+    """
+    if not isinstance(value, str):
+        return value
+    return os.path.expandvars(value)
 
 
 def _load(path):
@@ -160,22 +174,35 @@ def container_env(config):
     """Return environment variables from config to set in the container.
 
     Values must be strings; non-string values are converted to strings.
+    Host environment variables are expanded (e.g. ``$SSH_AUTH_SOCK``) so
+    that host paths can be passed through without hard-coding them. The
+    ``PATH`` key is exempt because ``${PATH}`` is expanded later to the
+    image's default PATH.
     """
     env = {}
     for key, value in config.get("env", {}).items():
-        env[key] = value if isinstance(value, str) else str(value)
+        value = value if isinstance(value, str) else str(value)
+        if key != "PATH":
+            value = _expand_host_vars(value)
+        env[key] = value
     return env
 
 
 def container_mounts(config):
     """Return normalized mount dicts for the container runtime.
 
-    Each dict contains ``source``, ``target`` and ``options`` keys. Use
+    Each dict contains ``source``, ``target`` and ``options`` keys. Host
+    environment variables (e.g. ``$HOME``) are expanded in ``source`` and
+    ``target`` so config files can use portable paths. Use
     :func:`_format_mount` to convert a dict into Podman's ``-v`` syntax.
     """
-    return [
-        _normalize_mount(item) for item in config.get("container", {}).get("mounts", [])
-    ]
+    mounts = []
+    for item in config.get("container", {}).get("mounts", []):
+        mount = _normalize_mount(item)
+        mount["source"] = _expand_host_vars(mount["source"])
+        mount["target"] = _expand_host_vars(mount["target"])
+        mounts.append(mount)
+    return mounts
 
 
 def container_ports(config):
