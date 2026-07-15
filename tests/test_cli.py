@@ -475,6 +475,7 @@ def test_init_creates_cauldron_directory_and_templates():
         assert "[env]" in content
         assert "mounts" in content
         assert "ports" in content
+        assert "known_hosts" in content
         assert ".gitconfig" in content
         assert "SSH_AUTH_SOCK" in content
 

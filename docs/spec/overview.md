@@ -128,6 +128,19 @@ ports = [
 
 Global and project ports are merged by host port. A project port that maps the same host port as a global port replaces the global one, and a warning is emitted.
 
+### Known hosts
+
+The `[container]` table can append entries to the container's `/etc/hosts` file for custom domain resolution.
+
+```toml
+[container]
+known_hosts = [
+  "my-service.local:127.0.0.1",
+]
+```
+
+Each entry is a string in `hostname:ip` format, passed to Podman's `--add-host` flag. Global and project known hosts are merged by hostname. A project entry with the same hostname as a global one replaces the global entry, and a warning is emitted.
+
 ## Platform support
 
 - **Linux**: primary target; rootless Podman is expected to be installed and configured.

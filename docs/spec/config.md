@@ -5,7 +5,7 @@ Cauldron reads optional TOML configuration files. Project settings override glob
 - Global config: `~/.config/cauldron/cauldron.toml`
 - Project config: `.cauldron/cauldron.toml`
 
-When both files exist, Cauldron merges them. The `[env]` table is merged at the key level, the `[container]` table is merged key-by-key, and `mounts` and `ports` are merged by their natural identifiers so that project values override global values without discarding unrelated entries.
+When both files exist, Cauldron merges them. The `[env]` table is merged at the key level, the `[container]` table is merged key-by-key, and `mounts`, `ports`, and `known_hosts` are merged by their natural identifiers so that project values override global values without discarding unrelated entries.
 
 ## Top-level sections
 
@@ -71,6 +71,20 @@ ports = [
 
 Each entry is a string in Podman's `-p` syntax. Global and project ports are merged by host port. If a project port maps the same host port as a global port, the project port wins and Cauldron emits a warning.
 
+#### `known_hosts`
+
+Append entries to the container's `/etc/hosts` file for custom domain resolution.
+
+```toml
+[container]
+known_hosts = [
+  "my-service.local:127.0.0.1",
+  "registry.internal:10.0.0.5",
+]
+```
+
+Each entry is a string in `hostname:ip` format, passed to Podman's `--add-host` flag. Global and project known hosts are merged by hostname. If a project entry has the same hostname as a global one, the project entry wins and Cauldron emits a warning.
+
 #### Git and SSH agent passthrough
 
 Git configuration and SSH agent forwarding are configured as ordinary mounts and environment variables, not as hard-coded behaviour.
@@ -121,6 +135,10 @@ ports = [
   "127.0.0.1:3000:3000",
 ]
 
+known_hosts = [
+  "my-service.local:127.0.0.1",
+]
+
 [env]
 PATH = "/home/cauldron/.opencode/bin:${PATH}"
 EDITOR = "vim"
@@ -140,6 +158,10 @@ ports = [
   "3000:3000",
 ]
 
+known_hosts = [
+  "registry.internal:10.0.0.5",
+]
+
 [env]
 EDITOR = "nano"
 ```
@@ -154,6 +176,9 @@ With the project config above, the effective configuration is:
 - Ports:
   - `8080:8080` (project)
   - `127.0.0.1:3000:3000` (project overrides the global `3000:3000`)
+- Known hosts:
+  - `my-service.local:127.0.0.1` (project)
+  - `registry.internal:10.0.0.5` (global)
 - Environment:
   - `EDITOR = "vim"` (project overrides global)
   - `PATH = "/home/cauldron/.opencode/bin:${PATH}"`
@@ -162,7 +187,8 @@ With the project config above, the effective configuration is:
 
 - A mount must have `source` and `target`. Missing keys raise an error when the config is loaded.
 - A port must be a string. Non-string port entries raise an error when the config is loaded.
-- Overlapping mount targets or host ports are allowed but produce a warning; the last defined value wins.
+- A known-hosts entry must be a string in `hostname:ip` format. Entries without a colon raise an error when the config is loaded.
+- Overlapping mount targets, host ports, or known-hosts hostnames are allowed but produce a warning; the last defined value wins.
 - Invalid TOML continues to raise the same TOML parsing error as before.
 
 ## Scope

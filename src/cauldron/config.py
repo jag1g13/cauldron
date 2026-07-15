@@ -119,13 +119,47 @@ def _merge_ports(global_ports, project_ports, warn):
     return [port for _, port in seen.values()]
 
 
+def _known_host_key(entry):
+    """Return the hostname merge key for a known-hosts entry string."""
+    if not isinstance(entry, str):
+        raise ValueError(f"Known host entry must be a string, got {type(entry).__name__}")
+    if ":" not in entry:
+        raise ValueError(f"Invalid known host entry: {entry!r} (expected 'hostname:ip')")
+    return entry.split(":", 1)[0]
+
+
+def _merge_known_hosts(global_hosts, project_hosts, warn):
+    """Merge known-hosts lists by hostname, project overrides global."""
+    seen = {}
+
+    def _add(source_name, entry):
+        key = _known_host_key(entry)
+        if key in seen:
+            previous_source, _ = seen[key]
+            if previous_source == "global" and source_name == "project":
+                warn(f"Project known host overrides global known host for hostname {key!r}")
+            elif previous_source == source_name:
+                warn(f"Duplicate {source_name} known host for hostname {key!r}")
+            else:
+                warn(f"Known host for hostname {key!r} is defined more than once")
+        seen[key] = (source_name, entry)
+
+    for entry in global_hosts:
+        _add("global", entry)
+    for entry in project_hosts:
+        _add("project", entry)
+
+    return [entry for _, entry in seen.values()]
+
+
 def load_config(project_dir=None, warn=None):
     """Load merged global and project configuration.
 
     Project config overrides global config. The ``env`` table is merged at the
     key level. The ``container`` table is merged key-by-key, but ``mounts`` are
-    merged by ``target`` and ``ports`` are merged by host port so that project
-    values override global values without discarding unrelated entries.
+    merged by ``target``, ``ports`` by host port, and ``known_hosts`` by
+    hostname so that project values override global values without discarding
+    unrelated entries.
     """
     if warn is None:
         warn = warnings.warn
@@ -142,7 +176,7 @@ def load_config(project_dir=None, warn=None):
 
     # Merge simple container keys directly.
     for key, value in project_container.items():
-        if key not in ("mounts", "ports"):
+        if key not in ("mounts", "ports", "known_hosts"):
             global_container[key] = value
 
     if "mounts" in global_container or "mounts" in project_container:
@@ -156,6 +190,13 @@ def load_config(project_dir=None, warn=None):
         global_container["ports"] = _merge_ports(
             global_container.get("ports", []),
             project_container.get("ports", []),
+            warn,
+        )
+
+    if "known_hosts" in global_container or "known_hosts" in project_container:
+        global_container["known_hosts"] = _merge_known_hosts(
+            global_container.get("known_hosts", []),
+            project_container.get("known_hosts", []),
             warn,
         )
 
@@ -208,3 +249,12 @@ def container_mounts(config):
 def container_ports(config):
     """Return port forwarding strings for the container runtime."""
     return list(config.get("container", {}).get("ports", []))
+
+
+def container_known_hosts(config):
+    """Return known-hosts entries for the container runtime.
+
+    Each entry is a string in ``hostname:ip`` format, passed to Podman's
+    ``--add-host`` flag to append entries to the container's ``/etc/hosts``.
+    """
+    return list(config.get("container", {}).get("known_hosts", []))

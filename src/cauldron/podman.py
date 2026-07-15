@@ -242,6 +242,7 @@ def run_container(
     env=None,
     mounts=None,
     ports=None,
+    known_hosts=None,
 ):
     """Create and start a detached container with the standard mounts.
 
@@ -250,6 +251,8 @@ def run_container(
 
     ``mounts`` is a list of dicts with ``source``, ``target`` and ``options``.
     ``ports`` is a list of strings in Podman's ``-p`` syntax.
+    ``known_hosts`` is a list of strings in ``hostname:ip`` format, passed to
+    Podman's ``--add-host`` flag.
 
     Git configuration and SSH agent forwarding are no longer handled here;
     add them as ordinary mounts and environment variables in the config file.
@@ -287,6 +290,9 @@ def run_container(
 
     for port in ports or []:
         args.extend(["-p", port])
+
+    for entry in known_hosts or []:
+        args.extend(["--add-host", entry])
 
     env = env or {}
     if "PATH" in env and "${PATH}" in env["PATH"]:

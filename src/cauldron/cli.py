@@ -179,6 +179,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         env=container_env,
         mounts=config.container_mounts(cfg),
         ports=config.container_ports(cfg),
+        known_hosts=config.container_known_hosts(cfg),
     ):
         raise click.ClickException(f"Failed to start container {container}.")
 

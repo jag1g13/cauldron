@@ -1,6 +1,7 @@
 # Cauldron project configuration.
 #
-# Use the [container] table to customise the container image, mounts, and ports.
+# Use the [container] table to customise the container image, mounts, ports,
+# and known-hosts entries.
 # Use the [env] table to set environment variables inside the container.
 # PATH values may use ${PATH} as a placeholder for the image's default PATH.
 #
@@ -21,6 +22,10 @@
 
 # ports = [
 #   "8080:8080",
+# ]
+
+# known_hosts = [
+#   "my-service.local:127.0.0.1",
 # ]
 
 [env]

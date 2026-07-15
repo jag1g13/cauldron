@@ -8,7 +8,7 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 - Per-project environments identified by directory name.
 - Custom Dockerfiles layered on top of the configured base image via the `CAULDRON_BASE` build argument.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
-- Additional mounts and port forwards declared in the config file.
+- Additional mounts, port forwards, and known-hosts entries declared in the config file.
 - Commands for checking dependencies, initialising projects, starting/restarting, stopping, removing, listing, executing into, and opening VSCode in containers.
 
 ## Quick start
@@ -87,6 +87,19 @@ ports = [
 ```
 
 Project ports override global ports when they refer to the same host port.
+
+### Known hosts
+
+Use the `[container]` table to append entries to the container's `/etc/hosts` file for custom domain resolution.
+
+```toml
+[container]
+known_hosts = [
+  "my-service.local:127.0.0.1",
+]
+```
+
+Each entry is a `hostname:ip` pair passed to Podman's `--add-host` flag. Project entries override global entries for the same hostname.
 
 ### Git and SSH agent passthrough
 

@@ -423,6 +423,24 @@ def test_run_container_publishes_ports():
         assert "127.0.0.1:3000:3000" in args
 
 
+def test_run_container_adds_known_hosts():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            known_hosts=["my-service.local:127.0.0.1", "registry.internal:10.0.0.5"],
+        )
+        args = mock_run.call_args[0][0]
+        assert "--add-host" in args
+        assert "my-service.local:127.0.0.1" in args
+        assert "registry.internal:10.0.0.5" in args
+
+
 def test_run_container_warns_when_selinux_enabled_and_no_label():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
