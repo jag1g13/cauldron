@@ -9,7 +9,7 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 - Custom Dockerfiles layered on top of the configured base image via the `CAULDRON_BASE` build argument.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
 - Additional mounts, port forwards, and known-hosts entries declared in the config file.
-- Commands for checking dependencies, initialising projects, starting/restarting, stopping, removing, listing, executing into, and opening VSCode in containers.
+- Commands for checking dependencies, initialising projects, starting/restarting, stopping, removing, listing, executing into, and opening VSCode via Remote-SSH in containers.
 
 ## Quick start
 
@@ -26,7 +26,7 @@ cauldron up
 # Open a shell
 cauldron exec
 
-# Open the project in VSCode
+# Open the project in VSCode (requires Remote-SSH extension)
 cauldron code
 ```
 
