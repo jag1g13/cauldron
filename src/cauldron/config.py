@@ -122,9 +122,13 @@ def _merge_ports(global_ports, project_ports, warn):
 def _known_host_key(entry):
     """Return the hostname merge key for a known-hosts entry string."""
     if not isinstance(entry, str):
-        raise ValueError(f"Known host entry must be a string, got {type(entry).__name__}")
+        raise ValueError(
+            f"Known host entry must be a string, got {type(entry).__name__}"
+        )
     if ":" not in entry:
-        raise ValueError(f"Invalid known host entry: {entry!r} (expected 'hostname:ip')")
+        raise ValueError(
+            f"Invalid known host entry: {entry!r} (expected 'hostname:ip')"
+        )
     return entry.split(":", 1)[0]
 
 
@@ -137,7 +141,9 @@ def _merge_known_hosts(global_hosts, project_hosts, warn):
         if key in seen:
             previous_source, _ = seen[key]
             if previous_source == "global" and source_name == "project":
-                warn(f"Project known host overrides global known host for hostname {key!r}")
+                warn(
+                    f"Project known host overrides global known host for hostname {key!r}"
+                )
             elif previous_source == source_name:
                 warn(f"Duplicate {source_name} known host for hostname {key!r}")
             else:

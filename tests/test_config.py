@@ -203,8 +203,16 @@ def test_container_mounts_expands_host_vars(monkeypatch):
     cfg = {
         "container": {
             "mounts": [
-                {"source": "$HOME/.gitconfig", "target": "/home/cauldron/.gitconfig", "options": "ro,Z"},
-                {"source": "$SSH_AUTH_SOCK", "target": "$SSH_AUTH_SOCK", "options": "ro"},
+                {
+                    "source": "$HOME/.gitconfig",
+                    "target": "/home/cauldron/.gitconfig",
+                    "options": "ro,Z",
+                },
+                {
+                    "source": "$SSH_AUTH_SOCK",
+                    "target": "$SSH_AUTH_SOCK",
+                    "options": "ro",
+                },
             ]
         }
     }
