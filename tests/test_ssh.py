@@ -205,3 +205,5 @@ def test_ensure_include_preserves_existing_content(tmp_path):
         content = user_config.read_text()
         assert "ServerAliveInterval" in content
         assert "# BEGIN cauldron" in content
+        assert content.startswith("# BEGIN cauldron\n")
+        assert content.index("# BEGIN cauldron") < content.index("ServerAliveInterval")

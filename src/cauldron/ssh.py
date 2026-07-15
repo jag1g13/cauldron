@@ -175,8 +175,7 @@ def _ensure_include_in_user_config():
         f"Include {SSH_CONFIG}\n"
         f"{INCLUDE_MARKER_END}\n"
     )
-    separator = "\n" if existing and not existing.endswith("\n") else ""
-    updated = existing + separator + new_block
+    updated = new_block + existing
 
     USER_SSH_CONFIG.write_text(updated)
     USER_SSH_CONFIG.chmod(0o600)
