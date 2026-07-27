@@ -22,6 +22,8 @@ Override the default Debian base image. The configured image is passed to the bu
 base_image = "astral/uv:python3.14-trixie"
 ```
 
+Use a pre-built container image, not a Dev Container *template*. Templates (e.g. `ghcr.io/devcontainers/templates/...`) are OCI artifacts whose layers use a media type that Podman cannot build from, so `podman build` fails with `Unknown media type during manifest conversion`. The equivalent pre-built images live at `mcr.microsoft.com/devcontainers/...` (see <https://github.com/devcontainers/images>) and build correctly. When Cauldron detects this failure, it offers to rewrite `base_image` to the matching pre-built image and retry the build.
+
 #### `mounts`
 
 Mount additional files or directories into the container. Each entry can be either an inline table or a Docker short-syntax string.

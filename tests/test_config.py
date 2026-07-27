@@ -344,3 +344,84 @@ def test_container_known_hosts_returns_configured_entries():
 
 def test_container_known_hosts_returns_empty_when_missing():
     assert config.container_known_hosts({}) == []
+
+
+def test_set_base_image_updates_project_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    config_file = cauldron_dir / "cauldron.toml"
+    config_file.write_text(
+        "[container]\n"
+        'base_image = "ghcr.io/devcontainers/templates/typescript-node:5.0.0"\n'
+        '# base_image = "should-not-change"\n'
+    )
+
+    updated = config.set_base_image(
+        tmp_path, "mcr.microsoft.com/devcontainers/typescript-node:5.0-24"
+    )
+
+    assert updated == config_file
+    content = config_file.read_text()
+    assert (
+        'base_image = "mcr.microsoft.com/devcontainers/typescript-node:5.0-24"'
+        in content
+    )
+    assert "should-not-change" in content
+    assert "5.0.0" not in content
+
+
+def test_set_base_image_falls_back_to_global(tmp_path, monkeypatch):
+    global_file = tmp_path / "global.toml"
+    global_file.write_text(
+        "[container]\n"
+        'base_image = "ghcr.io/devcontainers/templates/typescript-node:5.0.0"\n'
+    )
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".cauldron").mkdir()
+    (project_dir / ".cauldron" / "cauldron.toml").write_text('[env]\nFOO = "bar"\n')
+
+    updated = config.set_base_image(
+        project_dir, "mcr.microsoft.com/devcontainers/typescript-node:5.0-24"
+    )
+
+    assert updated == global_file
+    assert "5.0-24" in global_file.read_text()
+
+
+def test_set_base_image_returns_none_when_not_defined(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".cauldron").mkdir()
+    (project_dir / ".cauldron" / "cauldron.toml").write_text('[env]\nFOO = "bar"\n')
+
+    updated = config.set_base_image(
+        project_dir, "mcr.microsoft.com/devcontainers/typescript-node:5.0-24"
+    )
+
+    assert updated is None
+
+
+def test_set_base_image_preserves_other_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    config_file = cauldron_dir / "cauldron.toml"
+    config_file.write_text(
+        "[container]\n"
+        'base_image = "ghcr.io/devcontainers/templates/typescript-node:5.0.0"\n'
+        'known_hosts = ["my-service.local:127.0.0.1"]\n\n'
+        '[env]\nEDITOR = "vim"\n'
+    )
+
+    config.set_base_image(
+        tmp_path, "mcr.microsoft.com/devcontainers/typescript-node:5.0-24"
+    )
+
+    content = config_file.read_text()
+    assert 'EDITOR = "vim"' in content
+    assert "my-service.local:127.0.0.1" in content
+    assert "5.0-24" in content

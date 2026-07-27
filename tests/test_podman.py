@@ -147,10 +147,10 @@ def test_run_test_container_uses_configured_base_image():
 def test_build_image_runs_podman_build():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
-        assert (
-            podman.build_image("cauldron-foo:latest", "/path/Dockerfile", "/context")
-            is True
+        result = podman.build_image(
+            "cauldron-foo:latest", "/path/Dockerfile", "/context"
         )
+        assert result.returncode == 0
         mock_run.assert_called_once_with(
             ["build", "-t", "cauldron-foo:latest", "-f", "/path/Dockerfile", "/context"]
         )
@@ -159,15 +159,13 @@ def test_build_image_runs_podman_build():
 def test_build_image_passes_build_args():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
-        assert (
-            podman.build_image(
-                "cauldron-foo:latest",
-                "/path/Dockerfile",
-                "/context",
-                build_args={"CAULDRON_BASE": "astral/uv:python3.14-trixie"},
-            )
-            is True
+        result = podman.build_image(
+            "cauldron-foo:latest",
+            "/path/Dockerfile",
+            "/context",
+            build_args={"CAULDRON_BASE": "astral/uv:python3.14-trixie"},
         )
+        assert result.returncode == 0
         mock_run.assert_called_once_with(
             [
                 "build",

@@ -4,7 +4,7 @@ import sys
 
 import click
 
-from cauldron import config, podman, project, ssh, vscode
+from cauldron import config, devcontainers, podman, project, ssh, vscode
 
 
 def _read_data_file(name):
@@ -77,6 +77,64 @@ def init():
 def _tty_flags():
     """Return (interactive, tty) based on the current stdin/stdout."""
     return sys.stdin.isatty(), sys.stdout.isatty()
+
+
+def _stderr_suffix(result):
+    """Format captured stderr for appending to an error message."""
+    stderr = (result.stderr or "").strip()
+    return f"\n{stderr}" if stderr else ""
+
+
+def _recover_template_base(result, base_image, project_dir):
+    """Recover from a build failure caused by a Dev Container template image.
+
+    Templates (``ghcr.io/devcontainers/templates/...``) use a non-standard
+    layer media type that Podman cannot build from, failing with
+    ``Unknown media type during manifest conversion``. The equivalent
+    pre-built images at ``mcr.microsoft.com/devcontainers/...`` build fine.
+
+    If the failure matches and a matching MCR image can be verified, prompt
+    the user to update ``cauldron.toml`` and return the new base image so the
+    caller can retry. Returns None (so the caller surfaces the original
+    error) when the failure is not a template issue, no replacement can be
+    verified, or the user declines.
+    """
+    stderr = result.stderr or ""
+    if not (
+        devcontainers.is_template_manifest_error(stderr)
+        and devcontainers.is_template_image(base_image)
+    ):
+        return None
+
+    click.echo(
+        f"The base image {base_image!r} is a Dev Container template. "
+        "Templates are OCI artifacts whose layers Podman cannot build from "
+        "directly; use the equivalent pre-built image instead."
+    )
+    suggestion = devcontainers.resolve_mcr_image(base_image)
+    if not suggestion:
+        name = devcontainers.template_name(base_image)
+        click.echo(
+            "Could not verify a matching image (is the registry reachable?). "
+            f"Try {devcontainers.MCR_PREFIX}{name}:latest and update "
+            "base_image manually, then retry."
+        )
+        return None
+    click.echo(f"Suggested replacement: {suggestion}")
+    if click.confirm(
+        f"Update cauldron.toml to use {suggestion} and retry the build?",
+        default=True,
+    ):
+        updated = config.set_base_image(project_dir, suggestion)
+        if not updated:
+            click.echo(
+                "No base_image entry found to update; please edit "
+                "cauldron.toml manually."
+            )
+            return None
+        click.echo(f"Updated base_image in {updated}.")
+        return suggestion
+    return None
 
 
 def _start_project_container(container, build=False, no_build=False, restart=False):
@@ -153,19 +211,43 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         if dockerfile:
             intermediate = f"{image.split(':')[0]}-intermediate:latest"
             click.echo(f"Building intermediate image from {dockerfile}...")
-            if not podman.build_image(
+            result = podman.build_image(
                 intermediate,
                 dockerfile,
                 dockerfile.parent,
                 build_args={"CAULDRON_BASE": resolved_base},
-            ):
-                raise click.ClickException(
-                    f"Failed to build intermediate image from {dockerfile}."
-                )
+            )
+            if result.returncode != 0:
+                new_base = _recover_template_base(result, resolved_base, project_dir)
+                if new_base:
+                    if not podman.ensure_base_image(new_base):
+                        raise click.ClickException("Failed to ensure base image.")
+                    click.echo(f"Retrying intermediate build with {new_base}...")
+                    result = podman.build_image(
+                        intermediate,
+                        dockerfile,
+                        dockerfile.parent,
+                        build_args={"CAULDRON_BASE": new_base},
+                    )
+                if result.returncode != 0:
+                    raise click.ClickException(
+                        "Failed to build intermediate image from "
+                        f"{dockerfile}.{_stderr_suffix(result)}"
+                    )
 
         project_base = intermediate or resolved_base
-        if not podman.build_project_image(image, uid, gid, project_base):
-            raise click.ClickException("Failed to build project image.")
+        result = podman.build_project_image(image, uid, gid, project_base)
+        if result.returncode != 0:
+            new_base = _recover_template_base(result, project_base, project_dir)
+            if new_base:
+                if not podman.ensure_base_image(new_base):
+                    raise click.ClickException("Failed to ensure base image.")
+                click.echo(f"Retrying project image build with {new_base}...")
+                result = podman.build_project_image(image, uid, gid, new_base)
+            if result.returncode != 0:
+                raise click.ClickException(
+                    f"Failed to build project image.{_stderr_suffix(result)}"
+                )
 
     click.echo(f"Starting container {container}...")
     container_env = config.container_env(cfg)

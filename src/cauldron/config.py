@@ -1,5 +1,6 @@
 import os
 import pathlib
+import re
 import tomllib
 import warnings
 
@@ -215,6 +216,41 @@ def load_config(project_dir=None, warn=None):
 def base_image(config):
     """Return the configured base image, or None to use the default."""
     return config.get("container", {}).get("base_image")
+
+
+def set_base_image(project_dir, new_image):
+    """Update the ``base_image`` entry in the project or global config file.
+
+    The project config is updated if it defines ``base_image``; otherwise the
+    global config is updated. Returns the path that was updated, or None if
+    neither file defines ``base_image``.
+    """
+    project_path = pathlib.Path(project_dir or ".").resolve() / CONFIG_PROJECT_PATH
+    if _has_base_image(project_path):
+        _replace_base_image(project_path, new_image)
+        return project_path
+    if _has_base_image(CONFIG_GLOBAL_PATH):
+        _replace_base_image(CONFIG_GLOBAL_PATH, new_image)
+        return CONFIG_GLOBAL_PATH
+    return None
+
+
+def _has_base_image(path):
+    """Return True if the TOML file at ``path`` defines a base_image."""
+    return "base_image" in _load(path).get("container", {})
+
+
+def _replace_base_image(path, new_image):
+    """Replace the first uncommented base_image line in ``path``."""
+    text = path.read_text()
+    pattern = re.compile(r"""(?m)^(\s*)base_image\s*=\s*(['"])(.*?)\2""")
+    new_text, count = pattern.subn(
+        lambda m: f'{m.group(1)}base_image = "{new_image}"',
+        text,
+        count=1,
+    )
+    if count:
+        path.write_text(new_text)
 
 
 def container_env(config):

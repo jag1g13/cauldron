@@ -151,7 +151,8 @@ def build_image(tag, dockerfile, context, build_args=None):
     ``build_args`` is an optional dictionary of build arguments passed to
     Podman as ``--build-arg key=value``.
 
-    Returns True on success.
+    Returns the ``subprocess.CompletedProcess``; check ``result.returncode``.
+    The captured ``result.stderr`` lets callers inspect build failures.
     """
     args = [
         "build",
@@ -163,8 +164,7 @@ def build_image(tag, dockerfile, context, build_args=None):
     for key, value in (build_args or {}).items():
         args.extend(["--build-arg", f"{key}={value}"])
     args.append(str(context))
-    result = _run(args)
-    return result.returncode == 0
+    return _run(args)
 
 
 def build_project_image(tag, uid, gid, base_image=None):
@@ -174,7 +174,7 @@ def build_project_image(tag, uid, gid, base_image=None):
     The resulting image creates a user matching the host UID/GID and sets
     HOME to /home/cauldron.
 
-    Returns True on success.
+    Returns the ``subprocess.CompletedProcess``; check ``result.returncode``.
     """
     base = base_image or BASE_IMAGE
     dockerfile_content = f"""ARG CAULDRON_BASE

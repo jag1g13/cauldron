@@ -1,4 +1,6 @@
 import pathlib
+import subprocess
+from contextlib import ExitStack
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -6,6 +8,201 @@ from click.testing import CliRunner
 from cauldron.cli import cli
 from cauldron import podman as podman_module
 from cauldron import ssh
+
+
+def _ok():
+    """A successful build result (CompletedProcess with returncode 0)."""
+    return subprocess.CompletedProcess(args=[], returncode=0)
+
+
+def _failed(stderr):
+    """A failed build result (CompletedProcess with returncode 1)."""
+    return subprocess.CompletedProcess(args=[], returncode=1, stderr=stderr)
+
+
+TEMPLATE_STDERR = (
+    "Error: error creating build container: error preparing image configuration: "
+    "error converting image ... Unknown media type during manifest conversion: "
+    '"application/vnd.devcontainers.layer.v1+tar"'
+)
+TEMPLATE_REF = "ghcr.io/devcontainers/templates/typescript-node:5.0.0"
+MCR_REF = "mcr.microsoft.com/devcontainers/typescript-node:5.0-24"
+
+
+def _write_template_project(tmp_path):
+    """Create a project dir with a template base_image and a Dockerfile."""
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text(
+        f'[container]\nbase_image = "{TEMPLATE_REF}"\n'
+    )
+    (cauldron_dir / "Dockerfile").write_text(
+        "ARG CAULDRON_BASE\nFROM ${CAULDRON_BASE}\nRUN echo hi\n"
+    )
+
+
+def _common_up_patches(tmp_path):
+    """Return context managers patching the non-build up() dependencies."""
+    return (
+        patch("cauldron.podman.container_exists", return_value=False),
+        patch("cauldron.podman.image_exists", return_value=False),
+        patch("cauldron.podman.ensure_base_image", return_value=True),
+        patch("cauldron.podman.run_container", return_value=True),
+        patch("cauldron.podman.container_running", return_value=True),
+        patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path),
+        patch("cauldron.config.CONFIG_GLOBAL_PATH", tmp_path / "missing.toml"),
+    )
+
+
+def _invoke_up(
+    tmp_path,
+    build_image_patch=None,
+    build_project_patch=None,
+    resolve=None,
+    args=None,
+    input=None,
+):
+    """Run `cauldron up --build` with standard patches and return the result."""
+    with ExitStack() as stack:
+        for p in _common_up_patches(tmp_path):
+            stack.enter_context(p)
+        if build_image_patch is not None:
+            stack.enter_context(build_image_patch)
+        if build_project_patch is not None:
+            stack.enter_context(build_project_patch)
+        if resolve is not None:
+            stack.enter_context(resolve)
+        runner = CliRunner()
+        return runner.invoke(cli, args or ["up", "--build"], input=input)
+
+
+def test_up_recovers_template_base_intermediate(tmp_path):
+    _write_template_project(tmp_path)
+
+    calls = {"n": 0}
+
+    def build_side_effect(*a, **k):
+        calls["n"] += 1
+        return _failed(TEMPLATE_STDERR) if calls["n"] == 1 else _ok()
+
+    result = _invoke_up(
+        tmp_path,
+        build_image_patch=patch(
+            "cauldron.podman.build_image", side_effect=build_side_effect
+        ),
+        build_project_patch=patch(
+            "cauldron.podman.build_project_image", return_value=_ok()
+        ),
+        resolve=patch("cauldron.devcontainers.resolve_mcr_image", return_value=MCR_REF),
+        input="y\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Suggested replacement" in result.output
+    assert "Updated base_image" in result.output
+    assert calls["n"] == 2
+    content = (tmp_path / ".cauldron" / "cauldron.toml").read_text()
+    assert MCR_REF in content
+    assert TEMPLATE_REF not in content
+
+
+def test_up_recovers_template_base_without_dockerfile(tmp_path):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text(
+        f'[container]\nbase_image = "{TEMPLATE_REF}"\n'
+    )
+
+    calls = {"n": 0}
+
+    def build_side_effect(*a, **k):
+        calls["n"] += 1
+        return _failed(TEMPLATE_STDERR) if calls["n"] == 1 else _ok()
+
+    result = _invoke_up(
+        tmp_path,
+        build_project_patch=patch(
+            "cauldron.podman.build_project_image", side_effect=build_side_effect
+        ),
+        resolve=patch("cauldron.devcontainers.resolve_mcr_image", return_value=MCR_REF),
+        input="y\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Updated base_image" in result.output
+    assert calls["n"] == 2
+    content = (tmp_path / ".cauldron" / "cauldron.toml").read_text()
+    assert MCR_REF in content
+
+
+def test_up_template_recovery_declined(tmp_path):
+    _write_template_project(tmp_path)
+
+    result = _invoke_up(
+        tmp_path,
+        build_image_patch=patch(
+            "cauldron.podman.build_image", return_value=_failed(TEMPLATE_STDERR)
+        ),
+        build_project_patch=patch(
+            "cauldron.podman.build_project_image", return_value=_ok()
+        ),
+        resolve=patch("cauldron.devcontainers.resolve_mcr_image", return_value=MCR_REF),
+        input="n\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Failed to build intermediate image" in result.output
+    content = (tmp_path / ".cauldron" / "cauldron.toml").read_text()
+    assert TEMPLATE_REF in content
+    assert MCR_REF not in content
+
+
+def test_up_template_recovery_no_suggestion(tmp_path):
+    _write_template_project(tmp_path)
+
+    result = _invoke_up(
+        tmp_path,
+        build_image_patch=patch(
+            "cauldron.podman.build_image", return_value=_failed(TEMPLATE_STDERR)
+        ),
+        build_project_patch=patch(
+            "cauldron.podman.build_project_image", return_value=_ok()
+        ),
+        resolve=patch("cauldron.devcontainers.resolve_mcr_image", return_value=None),
+        input="y\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Could not verify" in result.output
+    assert "Failed to build intermediate image" in result.output
+    content = (tmp_path / ".cauldron" / "cauldron.toml").read_text()
+    assert TEMPLATE_REF in content
+
+
+def test_up_non_template_build_failure_is_not_recovered(tmp_path):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "Dockerfile").write_text(
+        "ARG CAULDRON_BASE\nFROM ${CAULDRON_BASE}\nRUN echo hi\n"
+    )
+    # No base_image in config -> default Debian base (not a template).
+
+    result = _invoke_up(
+        tmp_path,
+        build_image_patch=patch(
+            "cauldron.podman.build_image",
+            return_value=_failed("Error: something else went wrong"),
+        ),
+        build_project_patch=patch(
+            "cauldron.podman.build_project_image", return_value=_ok()
+        ),
+        input="y\n",
+    )
+
+    assert result.exit_code != 0
+    assert "Failed to build intermediate image" in result.output
+    assert "Suggested replacement" not in result.output
+    assert "something else went wrong" in result.output
 
 
 def test_cli_without_command_prints_help():
@@ -95,7 +292,7 @@ def test_up_restarts_existing_running_container(
 @patch("cauldron.podman.remove_container", return_value=True)
 @patch("cauldron.podman.image_exists", return_value=True)
 @patch("cauldron.podman.ensure_base_image", return_value=True)
-@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=_ok())
 @patch("cauldron.podman.run_container", return_value=True)
 @patch("cauldron.project.find_dockerfile", return_value=None)
 def test_up_build_rebuilds_and_replaces_existing_container(
@@ -131,7 +328,7 @@ def test_up_no_build_fails_when_image_missing(mock_image, mock_container):
 @patch("cauldron.podman.container_exists", return_value=False)
 @patch("cauldron.podman.image_exists", return_value=False)
 @patch("cauldron.podman.ensure_base_image", return_value=True)
-@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=_ok())
 @patch("cauldron.podman.run_container", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.project.find_dockerfile", return_value=None)
@@ -155,7 +352,7 @@ def test_up_builds_and_starts_container_when_image_missing(
 @patch("cauldron.podman.container_exists", return_value=False)
 @patch("cauldron.podman.image_exists", return_value=False)
 @patch("cauldron.podman.ensure_base_image", return_value=True)
-@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=_ok())
 @patch("cauldron.podman.run_container", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.project.find_dockerfile", return_value=None)
@@ -201,8 +398,8 @@ def test_up_skips_build_when_image_exists(
 @patch("cauldron.podman.container_exists", return_value=False)
 @patch("cauldron.podman.image_exists", return_value=True)
 @patch("cauldron.podman.ensure_base_image", return_value=True)
-@patch("cauldron.podman.build_image", return_value=True)
-@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.build_image", return_value=_ok())
+@patch("cauldron.podman.build_project_image", return_value=_ok())
 @patch("cauldron.podman.run_container", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 def test_up_builds_intermediate_when_dockerfile_exists(
