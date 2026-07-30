@@ -416,6 +416,24 @@ def exec_in_container(name, command, args=None, interactive=False, tty=False):
         return 1
 
 
+def exec_hook_in_container(name, command):
+    """Run a non-interactive lifecycle hook inside a container.
+
+    When verbose mode is enabled the hook's output is streamed to the
+    terminal. Otherwise output is captured silently and only the exit code is
+    returned.
+
+    Returns the command's exit code.
+    """
+    cmd = ["podman", "exec", name, command]
+    try:
+        if _verbose:
+            return subprocess.run(cmd).returncode
+        return subprocess.run(cmd, capture_output=True, text=True).returncode
+    except FileNotFoundError:
+        return 1
+
+
 def exec_check(name, command, user=None):
     """Return True if a command succeeds in the container, False otherwise.
 

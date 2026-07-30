@@ -92,7 +92,7 @@ def _run_lifecycle_hook(container, hook, scripts):
         return True
     script_path = f"{SCRIPT_INSTALL_PATH}/{hook}.sh"
     click.echo(f"Running {hook} script...")
-    return podman.exec_in_container(container, script_path) == 0
+    return podman.exec_hook_in_container(container, script_path) == 0
 
 
 def _start_project_container(container, build=False, no_build=False, restart=False):

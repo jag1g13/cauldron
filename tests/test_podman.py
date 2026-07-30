@@ -575,6 +575,38 @@ def test_exec_in_container_returns_podman_not_found():
         assert podman.exec_in_container("cauldron-foo", "ls") == 1
 
 
+def test_exec_hook_in_container_streams_output_when_verbose():
+    podman.set_verbose(True)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 0
+        mock_run.assert_called_once_with(
+            ["podman", "exec", "cauldron-foo", "/script.sh"]
+        )
+
+
+def test_exec_hook_in_container_captures_output_when_not_verbose():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 0
+        mock_run.assert_called_once_with(
+            ["podman", "exec", "cauldron-foo", "/script.sh"],
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_exec_hook_in_container_returns_exit_code():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 7
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 7
+
+
+def test_exec_hook_in_container_returns_podman_not_found():
+    with patch("subprocess.run", side_effect=FileNotFoundError()):
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 1
+
+
 def test_list_containers_parses_podman_ps_json():
     json_output = """[
         {

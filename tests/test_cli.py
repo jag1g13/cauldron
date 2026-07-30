@@ -534,7 +534,7 @@ def test_init_creates_cauldron_directory_and_templates():
 @patch("cauldron.podman.build_project_image", return_value=True)
 @patch("cauldron.podman.run_container", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
-@patch("cauldron.podman.exec_in_container", return_value=0)
+@patch("cauldron.podman.exec_hook_in_container", return_value=0)
 @patch("cauldron.project.find_dockerfile", return_value=None)
 def test_up_runs_post_create_and_post_start_on_new_container(
     mock_dockerfile,
@@ -572,8 +572,9 @@ post_start = "echo start"
 @patch("cauldron.podman.container_running", side_effect=[False, True])
 @patch("cauldron.podman.start_container", return_value=True)
 @patch("cauldron.podman.exec_in_container", return_value=0)
+@patch("cauldron.podman.exec_hook_in_container", return_value=0)
 def test_exec_runs_post_start_when_starting_stopped_container(
-    mock_exec, mock_start, mock_running, mock_exists, tmp_path, monkeypatch
+    mock_hook, mock_exec, mock_start, mock_running, mock_exists, tmp_path, monkeypatch
 ):
     config_file = tmp_path / ".cauldron" / "cauldron.toml"
     config_file.parent.mkdir(parents=True)
@@ -589,7 +590,7 @@ post_start = "#!/bin/bash\\necho start"
         mock_start.assert_called_once()
         hook_calls = [
             call
-            for call in mock_exec.call_args_list
+            for call in mock_hook.call_args_list
             if call[0][1] == "/usr/local/share/cauldron/post_start.sh"
         ]
         assert len(hook_calls) == 1
@@ -598,7 +599,7 @@ post_start = "#!/bin/bash\\necho start"
 @patch("cauldron.podman.container_exists", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.podman.restart_container", return_value=True)
-@patch("cauldron.podman.exec_in_container", return_value=0)
+@patch("cauldron.podman.exec_hook_in_container", return_value=0)
 def test_up_runs_post_start_when_restarting_container(
     mock_exec, mock_restart, mock_running, mock_exists, tmp_path, monkeypatch
 ):
@@ -658,7 +659,7 @@ entrypoint = "#!/bin/bash\\nexec \\"$@\\""
 @patch("cauldron.podman.build_project_image", return_value=True)
 @patch("cauldron.podman.run_container", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
-@patch("cauldron.podman.exec_in_container", return_value=1)
+@patch("cauldron.podman.exec_hook_in_container", return_value=1)
 @patch("cauldron.project.find_dockerfile", return_value=None)
 def test_up_fails_when_post_create_script_fails(
     mock_dockerfile,
