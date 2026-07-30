@@ -60,6 +60,32 @@ EDITOR = "vim"
 
 `${PATH}` is expanded to the image's default `PATH` when the container starts.
 
+### Lifecycle scripts
+
+Use the `[scripts]` table to inject scripts into the project image that run at
+specific points in the container lifecycle:
+
+```toml
+[scripts]
+post_create = """
+#!/bin/bash
+set -euo pipefail
+pip install -e .
+"""
+
+post_start = ".cauldron/post-start.sh"
+# entrypoint = ".cauldron/entrypoint.sh"  # replaces sleep infinity
+```
+
+- `post_create` runs once after a container is first created, including after
+  `cauldron up --build` recreates it.
+- `post_start` runs every time the container starts or restarts.
+- `entrypoint` replaces the default `sleep infinity` process; you are
+  responsible for keeping the container alive if needed.
+
+A script value can be inline content (multi-line strings are detected
+automatically) or a path to a script file relative to the project directory.
+
 ### Mounts
 
 Use the `[container]` table to mount additional files or directories into the container. Each mount needs a `source`, `target`, and optional `options`. You can also use Docker's short syntax: `"/host/path:/container/path:ro,Z"`.

@@ -19,6 +19,9 @@ def _expand_host_vars(value):
     return os.path.expandvars(value)
 
 
+KNOWN_HOOKS = ("post_create", "post_start", "entrypoint")
+
+
 def _load(path):
     """Load a TOML file, returning an empty dict if it is missing."""
     if not path.exists():
@@ -177,6 +180,14 @@ def load_config(project_dir=None, warn=None):
     if "env" in project_config:
         config.setdefault("env", {}).update(project_config["env"])
 
+    if "scripts" in project_config:
+        config.setdefault("scripts", {}).update(project_config["scripts"])
+
+    for key in list(config.get("scripts", {}).keys()):
+        if key not in KNOWN_HOOKS:
+            warn(f"Unknown script hook {key!r} ignored")
+            del config["scripts"][key]
+
     global_container = config.get("container", {})
     project_container = project_config.get("container", {})
 
@@ -264,3 +275,14 @@ def container_known_hosts(config):
     ``--add-host`` flag to append entries to the container's ``/etc/hosts``.
     """
     return list(config.get("container", {}).get("known_hosts", []))
+
+
+def container_scripts(config):
+    """Return lifecycle scripts from config.
+
+    Returns a dict mapping hook names (``post_create``, ``post_start``,
+    ``entrypoint``) to script values. Each value is either inline script
+    content or a file path. Project values override global values at the
+    key level.
+    """
+    return dict(config.get("scripts", {}))

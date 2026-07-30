@@ -344,3 +344,61 @@ def test_container_known_hosts_returns_configured_entries():
 
 def test_container_known_hosts_returns_empty_when_missing():
     assert config.container_known_hosts({}) == []
+
+
+def test_container_scripts_returns_configured_scripts():
+    cfg = {
+        "scripts": {
+            "post_create": "echo hello",
+            "post_start": ".cauldron/post-start.sh",
+            "entrypoint": '#!/bin/bash\nexec "$@"',
+        }
+    }
+    assert config.container_scripts(cfg) == cfg["scripts"]
+
+
+def test_container_scripts_returns_empty_when_missing():
+    assert config.container_scripts({}) == {}
+
+
+def test_load_config_merges_scripts_project_over_global(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[scripts]
+post_create = "echo global"
+post_start = "echo global-start"
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[scripts]
+post_create = "echo project"
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir)
+
+    assert loaded["scripts"]["post_create"] == "echo project"
+    assert loaded["scripts"]["post_start"] == "echo global-start"
+
+
+def test_load_config_warns_on_unknown_script_hook(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[scripts]
+unknown_hook = "echo bad"
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+
+    warnings = []
+    loaded = config.load_config(project_dir, warn=warnings.append)
+    assert any("Unknown script hook" in w for w in warnings)
+    assert "unknown_hook" not in loaded.get("scripts", {})

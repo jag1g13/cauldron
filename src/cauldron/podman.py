@@ -6,6 +6,7 @@ import tempfile
 import threading
 import warnings
 
+from cauldron import config as config_module
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
@@ -167,27 +168,61 @@ def build_image(tag, dockerfile, context, build_args=None):
     return result.returncode == 0
 
 
-def build_project_image(tag, uid, gid, base_image=None):
+def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_dir=None):
     """Build the final project image with the host user configured.
 
     The base image is supplied through the ``CAULDRON_BASE`` build argument.
     The resulting image creates a user matching the host UID/GID and sets
     HOME to /home/cauldron.
 
+    If ``scripts`` is provided, each hook is copied into the image as an
+    executable script at ``/usr/local/share/cauldron/<hook>.sh``. Inline
+    script content is written to a temporary file; file paths are read from
+    the project directory. If an ``entrypoint`` hook is present, the image
+    entrypoint is set to run it.
+
     Returns True on success.
     """
     base = base_image or BASE_IMAGE
-    dockerfile_content = f"""ARG CAULDRON_BASE
-FROM ${{CAULDRON_BASE}}
-USER root
-RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /run/sshd /home/cauldron/.ssh && chown {uid}:{gid} /home/cauldron/.ssh && chmod 700 /home/cauldron/.ssh
-ENV HOME={CONTAINER_HOME}
-"""
+    scripts = scripts or {}
+    project_dir = pathlib.Path(project_dir or ".").resolve()
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        dockerfile = pathlib.Path(tmpdir) / "Dockerfile"
-        dockerfile.write_text(dockerfile_content)
+        tmpdir = pathlib.Path(tmpdir)
+        script_files = {}
+
+        for hook, value in scripts.items():
+            if _is_inline_script(value):
+                content = value
+            else:
+                path = project_dir / pathlib.Path(
+                    config_module._expand_host_vars(value)
+                )
+                content = path.read_text()
+
+            script_path = tmpdir / f"{hook}.sh"
+            script_path.write_text(content)
+            script_files[hook] = f"{hook}.sh"
+
+        lines = [
+            "ARG CAULDRON_BASE",
+            "FROM ${CAULDRON_BASE}",
+            "USER root",
+            f"RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron",
+            "RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*",
+            f"RUN mkdir -p /run/sshd /home/cauldron/.ssh && chown {uid}:{gid} /home/cauldron/.ssh && chmod 700 /home/cauldron/.ssh",
+            f"ENV HOME={CONTAINER_HOME}",
+        ]
+
+        for hook, filename in script_files.items():
+            lines.append(f"COPY {filename} /usr/local/share/cauldron/{hook}.sh")
+            lines.append(f"RUN chmod +x /usr/local/share/cauldron/{hook}.sh")
+
+        if "entrypoint" in script_files:
+            lines.append('ENTRYPOINT ["/usr/local/share/cauldron/entrypoint.sh"]')
+
+        dockerfile = tmpdir / "Dockerfile"
+        dockerfile.write_text("\n".join(lines) + "\n")
         return build_image(tag, dockerfile, tmpdir, build_args={"CAULDRON_BASE": base})
 
 
@@ -226,6 +261,18 @@ def _has_selinux_option(options):
     return any(opt in ("z", "Z") for opt in options.split(","))
 
 
+def _is_inline_script(value):
+    """Return True if a script value looks like inline script content.
+
+    Multi-line strings and strings starting with a shebang are treated as
+    inline content; everything else is treated as a file path.
+    """
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    return "\n" in value or value.startswith("#!")
+
+
 def _format_mount_spec(mount):
     """Format a normalized mount dict as a Podman -v argument."""
     options = mount.get("options", "")
@@ -245,6 +292,7 @@ def run_container(
     mounts=None,
     ports=None,
     known_hosts=None,
+    entrypoint=False,
 ):
     """Create and start a detached container with the standard mounts.
 
@@ -255,6 +303,10 @@ def run_container(
     ``ports`` is a list of strings in Podman's ``-p`` syntax.
     ``known_hosts`` is a list of strings in ``hostname:ip`` format, passed to
     Podman's ``--add-host`` flag.
+
+    When ``entrypoint`` is True, the image's configured entrypoint is used and
+    no default ``sleep infinity`` command is appended. This is used when the
+    user has configured a custom ``entrypoint`` lifecycle script.
 
     Git configuration and SSH agent forwarding are no longer handled here;
     add them as ordinary mounts and environment variables in the config file.
@@ -305,7 +357,8 @@ def run_container(
         args.extend(["-e", f"{key}={value}"])
 
     args.append(image)
-    args.extend(["sleep", "infinity"])
+    if not entrypoint:
+        args.extend(["sleep", "infinity"])
 
     return _run(args).returncode == 0
 

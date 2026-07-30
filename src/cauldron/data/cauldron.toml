@@ -4,10 +4,12 @@
 # and known-hosts entries.
 # Use the [env] table to set environment variables inside the container.
 # PATH values may use ${PATH} as a placeholder for the image's default PATH.
+# Use the [scripts] table to inject scripts that run at container lifecycle
+# points: post_create, post_start, and entrypoint.
 #
 # Host environment variables (e.g. $HOME, $SSH_AUTH_SOCK) are expanded in
-# mount paths and env values, so you can reference host paths without
-# hard-coding them.
+# mount paths, env values, and script file paths, so you can reference host
+# paths without hard-coding them.
 #
 # The example mounts below pass through your Git configuration and SSH agent
 # socket. Uncomment them to enable passthrough.
@@ -32,3 +34,11 @@
 # PATH = "/home/cauldron/.local/bin:${PATH}"
 # SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
 # SHELL = "/bin/bash"
+
+# [scripts]
+# post_create = """
+# #!/bin/bash
+# echo "Running post-create setup"
+# """
+# post_start = ".cauldron/post-start.sh"
+# entrypoint = ".cauldron/entrypoint.sh"

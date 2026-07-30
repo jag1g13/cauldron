@@ -79,6 +79,22 @@ def _tty_flags():
     return sys.stdin.isatty(), sys.stdout.isatty()
 
 
+SCRIPT_INSTALL_PATH = "/usr/local/share/cauldron"
+
+
+def _run_lifecycle_hook(container, hook, scripts):
+    """Run a lifecycle hook script inside the container if configured.
+
+    Returns True if the hook is not configured or exits successfully.
+    Streams hook output to the terminal.
+    """
+    if hook not in scripts:
+        return True
+    script_path = f"{SCRIPT_INSTALL_PATH}/{hook}.sh"
+    click.echo(f"Running {hook} script...")
+    return podman.exec_in_container(container, script_path) == 0
+
+
 def _start_project_container(container, build=False, no_build=False, restart=False):
     """Ensure the project's container exists and is running.
 
@@ -89,6 +105,9 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     When ``restart`` is true, an existing container is restarted instead of
     being left running. If ``build`` is also true, the existing container is
     removed so it can be recreated from the rebuilt image.
+
+    Configured lifecycle scripts are copied into the image at build time and
+    executed at the appropriate lifecycle points.
     """
     if build and no_build:
         raise click.ClickException("--build and --no-build cannot be used together.")
@@ -98,6 +117,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     uid, gid = project.host_user()
     cfg = config.load_config(project_dir)
     base_image = config.base_image(cfg)
+    scripts = config.container_scripts(cfg)
+    has_entrypoint = "entrypoint" in scripts
 
     if podman.container_exists(container):
         if restart:
@@ -124,6 +145,10 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                     raise click.ClickException(
                         f"Container {container} did not restart."
                     )
+                if not _run_lifecycle_hook(container, "post_start", scripts):
+                    raise click.ClickException(
+                        f"post_start script failed for {container}."
+                    )
                 click.echo(f"Container {container} is running.")
                 return
         else:
@@ -134,6 +159,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 raise click.ClickException(f"Failed to start container {container}.")
             if not podman.container_running(container):
                 raise click.ClickException(f"Container {container} did not start.")
+            if not _run_lifecycle_hook(container, "post_start", scripts):
+                raise click.ClickException(f"post_start script failed for {container}.")
             click.echo(f"Container {container} is running.")
             return
 
@@ -164,7 +191,14 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 )
 
         project_base = intermediate or resolved_base
-        if not podman.build_project_image(image, uid, gid, project_base):
+        if not podman.build_project_image(
+            image,
+            uid,
+            gid,
+            project_base,
+            scripts=scripts,
+            project_dir=project_dir,
+        ):
             raise click.ClickException("Failed to build project image.")
 
     click.echo(f"Starting container {container}...")
@@ -180,11 +214,17 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         mounts=config.container_mounts(cfg),
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
+        entrypoint=has_entrypoint,
     ):
         raise click.ClickException(f"Failed to start container {container}.")
 
     if not podman.container_running(container):
         raise click.ClickException(f"Container {container} did not start.")
+
+    if not _run_lifecycle_hook(container, "post_create", scripts):
+        raise click.ClickException(f"post_create script failed for {container}.")
+    if not _run_lifecycle_hook(container, "post_start", scripts):
+        raise click.ClickException(f"post_start script failed for {container}.")
 
     click.echo(f"Container {container} is running.")
 
