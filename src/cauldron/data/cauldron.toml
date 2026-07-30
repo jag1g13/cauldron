@@ -13,7 +13,7 @@
 # socket. Uncomment them to enable passthrough.
 
 [container]
-# base_image = "astral/uv:python3.14-trixie"
+# base_image = "docker.io/astral/uv:python3.14-trixie"
 
 # mounts = [
 #   {source = "$HOME/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},
@@ -31,3 +31,4 @@
 [env]
 # PATH = "/home/cauldron/.local/bin:${PATH}"
 # SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
+# SHELL = "/bin/bash"
