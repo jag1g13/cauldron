@@ -349,9 +349,9 @@ def test_container_known_hosts_returns_empty_when_missing():
 def test_container_scripts_returns_configured_scripts():
     cfg = {
         "scripts": {
-            "post_create": "echo hello",
-            "post_start": ".cauldron/post-start.sh",
-            "entrypoint": '#!/bin/bash\nexec "$@"',
+            "post_build": "post_build.sh",
+            "post_start": "post-start.sh",
+            "entrypoint": "entrypoint.sh",
         }
     }
     assert config.container_scripts(cfg) == cfg["scripts"]
@@ -366,8 +366,8 @@ def test_load_config_merges_scripts_project_over_global(tmp_path, monkeypatch):
     global_file.parent.mkdir()
     global_file.write_text("""
 [scripts]
-post_create = "echo global"
-post_start = "echo global-start"
+post_build = "global-build.sh"
+post_start = "global-start.sh"
 """)
 
     project_dir = tmp_path / "project"
@@ -375,15 +375,15 @@ post_start = "echo global-start"
     project_file = project_dir / "cauldron.toml"
     project_file.write_text("""
 [scripts]
-post_create = "echo project"
+post_build = "project-build.sh"
 """)
 
     monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
     monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
     loaded = config.load_config(project_dir)
 
-    assert loaded["scripts"]["post_create"] == "echo project"
-    assert loaded["scripts"]["post_start"] == "echo global-start"
+    assert loaded["scripts"]["post_build"] == "project-build.sh"
+    assert loaded["scripts"]["post_start"] == "global-start.sh"
 
 
 def test_load_config_warns_on_unknown_script_hook(tmp_path, monkeypatch):
@@ -402,3 +402,38 @@ unknown_hook = "echo bad"
     loaded = config.load_config(project_dir, warn=warnings.append)
     assert any("Unknown script hook" in w for w in warnings)
     assert "unknown_hook" not in loaded.get("scripts", {})
+
+
+def test_resolve_script_prefers_project_script(tmp_path, monkeypatch):
+    global_dir = tmp_path / "home" / ".config" / "cauldron"
+    global_dir.mkdir(parents=True)
+    global_config = global_dir / "cauldron.toml"
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_config)
+
+    project_dir = tmp_path / "project"
+    project_scripts = project_dir / ".cauldron"
+    project_scripts.mkdir(parents=True)
+    project_script = project_scripts / "setup.sh"
+    project_script.write_text("project")
+    (global_dir / "setup.sh").write_text("global")
+
+    assert config.resolve_script("setup.sh", project_dir) == project_script
+
+
+def test_resolve_script_falls_back_to_global_script(tmp_path, monkeypatch):
+    global_dir = tmp_path / "home" / ".config" / "cauldron"
+    global_dir.mkdir(parents=True)
+    global_config = global_dir / "cauldron.toml"
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_config)
+
+    project_dir = tmp_path / "project"
+    (project_dir / ".cauldron").mkdir(parents=True)
+    global_script = global_dir / "setup.sh"
+    global_script.write_text("global")
+
+    assert config.resolve_script("setup.sh", project_dir) == global_script
+
+
+def test_resolve_script_rejects_paths(tmp_path):
+    with pytest.raises(ValueError, match="must be a filename"):
+        config.resolve_script(".cauldron/setup.sh", tmp_path)

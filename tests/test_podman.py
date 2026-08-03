@@ -633,17 +633,19 @@ def test_list_containers_returns_empty_on_failure():
         assert podman.list_containers() == []
 
 
-def test_build_project_image_copies_inline_scripts(tmp_path):
-    captured = {"content": None}
+def test_build_project_image_copies_scripts_and_runs_post_build(tmp_path):
+    captured = {"content": None, "args": None}
 
     def capture_build(_tag, dockerfile, _context, build_args=None):
         captured["content"] = dockerfile.read_text()
+        captured["args"] = build_args
         return True
 
-    scripts = {
-        "post_create": "#!/bin/bash\necho create",
-        "post_start": "#!/bin/bash\necho start",
-    }
+    script_dir = tmp_path / ".cauldron"
+    script_dir.mkdir()
+    (script_dir / "post_build.sh").write_text("#!/bin/bash\necho build")
+    (script_dir / "post-start.sh").write_text("#!/bin/bash\necho start")
+    scripts = {"post_build": "post_build.sh", "post_start": "post-start.sh"}
 
     with patch("cauldron.podman.build_image", side_effect=capture_build):
         assert (
@@ -658,9 +660,19 @@ def test_build_project_image_copies_inline_scripts(tmp_path):
         )
 
     content = captured["content"]
-    assert "COPY post_create.sh /usr/local/share/cauldron/post_create.sh" in content
-    assert "RUN chmod +x /usr/local/share/cauldron/post_create.sh" in content
+    assert "COPY post_build.sh /usr/local/share/cauldron/post_build.sh" in content
+    assert "RUN chmod +x /usr/local/share/cauldron/post_build.sh" in content
     assert "COPY post_start.sh /usr/local/share/cauldron/post_start.sh" in content
+    assert "USER cauldron" in content
+    assert "ARG CAULDRON_RUN_POST_BUILD=false" in content
+    assert (
+        'RUN if [ "$CAULDRON_RUN_POST_BUILD" = "true" ]; then /usr/local/share/cauldron/post_build.sh; fi'
+        in content
+    )
+    assert captured["args"] == {
+        "CAULDRON_BASE": podman.BASE_IMAGE,
+        "CAULDRON_RUN_POST_BUILD": "true",
+    }
 
 
 def test_build_project_image_copies_file_scripts(tmp_path):
@@ -674,7 +686,7 @@ def test_build_project_image_copies_file_scripts(tmp_path):
     script_file.parent.mkdir(parents=True)
     script_file.write_text("#!/bin/bash\necho start")
 
-    scripts = {"post_start": ".cauldron/post-start.sh"}
+    scripts = {"post_start": "post-start.sh"}
 
     with patch("cauldron.podman.build_image", side_effect=capture_build):
         assert (
@@ -699,7 +711,10 @@ def test_build_project_image_sets_entrypoint(tmp_path):
         captured["content"] = dockerfile.read_text()
         return True
 
-    scripts = {"entrypoint": '#!/bin/bash\nexec "$@"'}
+    script_dir = tmp_path / ".cauldron"
+    script_dir.mkdir()
+    (script_dir / "entrypoint.sh").write_text('#!/bin/bash\nexec "$@"')
+    scripts = {"entrypoint": "entrypoint.sh"}
 
     with patch("cauldron.podman.build_image", side_effect=capture_build):
         assert (

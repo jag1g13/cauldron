@@ -67,24 +67,20 @@ specific points in the container lifecycle:
 
 ```toml
 [scripts]
-post_create = """
-#!/bin/bash
-set -euo pipefail
-pip install -e .
-"""
-
-post_start = ".cauldron/post-start.sh"
-# entrypoint = ".cauldron/entrypoint.sh"  # replaces sleep infinity
+post_build = "post_build.sh"
+post_start = "post-start.sh"
+# entrypoint = "entrypoint.sh"  # replaces sleep infinity
 ```
 
-- `post_create` runs once after a container is first created, including after
-  `cauldron up --build` recreates it.
+- `post_build` runs once as the final executable step of the project image
+  build, as the `cauldron` user.
 - `post_start` runs every time the container starts or restarts.
 - `entrypoint` replaces the default `sleep infinity` process; you are
   responsible for keeping the container alive if needed.
 
-A script value can be inline content (multi-line strings are detected
-automatically) or a path to a script file relative to the project directory.
+Script names resolve to Bash files in the project's `.cauldron/` directory first,
+then the global `~/.config/cauldron/` directory. `cauldron init` creates a
+`.cauldron/post_build.sh` template.
 
 ### Mounts
 

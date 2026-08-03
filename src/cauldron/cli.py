@@ -73,6 +73,14 @@ def init():
         config_file.write_text(_read_data_file("cauldron.toml"))
         click.echo(f"Created {rel_dir / 'cauldron.toml'}")
 
+    post_build = cauldron_dir / "post_build.sh"
+    if post_build.exists():
+        click.echo(f"Keeping existing {rel_dir / 'post_build.sh'}")
+    else:
+        post_build.write_text(_read_data_file("post_build.sh"))
+        post_build.chmod(0o755)
+        click.echo(f"Created {rel_dir / 'post_build.sh'}")
+
 
 def _tty_flags():
     """Return (interactive, tty) based on the current stdin/stdout."""
@@ -221,8 +229,6 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     if not podman.container_running(container):
         raise click.ClickException(f"Container {container} did not start.")
 
-    if not _run_lifecycle_hook(container, "post_create", scripts):
-        raise click.ClickException(f"post_create script failed for {container}.")
     if not _run_lifecycle_hook(container, "post_start", scripts):
         raise click.ClickException(f"post_start script failed for {container}.")
 

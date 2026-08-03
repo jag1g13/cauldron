@@ -175,11 +175,11 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
     The resulting image creates a user matching the host UID/GID and sets
     HOME to /home/cauldron.
 
-    If ``scripts`` is provided, each hook is copied into the image as an
-    executable script at ``/usr/local/share/cauldron/<hook>.sh``. Inline
-    script content is written to a temporary file; file paths are read from
-    the project directory. If an ``entrypoint`` hook is present, the image
-    entrypoint is set to run it.
+    If ``scripts`` is provided, each named Bash script is copied into the image
+    as an executable script at ``/usr/local/share/cauldron/<hook>.sh``. Project
+    scripts take precedence over global scripts. The ``post_build`` hook runs
+    as the final build step as the ``cauldron`` user. If an ``entrypoint`` hook
+    is present, the image entrypoint is set to run it.
 
     Returns True on success.
     """
@@ -192,13 +192,8 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
         script_files = {}
 
         for hook, value in scripts.items():
-            if _is_inline_script(value):
-                content = value
-            else:
-                path = project_dir / pathlib.Path(
-                    config_module._expand_host_vars(value)
-                )
-                content = path.read_text()
+            path = config_module.resolve_script(value, project_dir)
+            content = path.read_text()
 
             script_path = tmpdir / f"{hook}.sh"
             script_path.write_text(content)
@@ -218,12 +213,24 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
             lines.append(f"COPY {filename} /usr/local/share/cauldron/{hook}.sh")
             lines.append(f"RUN chmod +x /usr/local/share/cauldron/{hook}.sh")
 
+        lines.append("USER cauldron")
+
+        build_args = {"CAULDRON_BASE": base}
+        if "post_build" in script_files:
+            lines.extend(
+                [
+                    "ARG CAULDRON_RUN_POST_BUILD=false",
+                    'RUN if [ "$CAULDRON_RUN_POST_BUILD" = "true" ]; then /usr/local/share/cauldron/post_build.sh; fi',
+                ]
+            )
+            build_args["CAULDRON_RUN_POST_BUILD"] = "true"
+
         if "entrypoint" in script_files:
             lines.append('ENTRYPOINT ["/usr/local/share/cauldron/entrypoint.sh"]')
 
         dockerfile = tmpdir / "Dockerfile"
         dockerfile.write_text("\n".join(lines) + "\n")
-        return build_image(tag, dockerfile, tmpdir, build_args={"CAULDRON_BASE": base})
+        return build_image(tag, dockerfile, tmpdir, build_args=build_args)
 
 
 def container_exists(name):
@@ -259,18 +266,6 @@ def _selinux_enabled():
 def _has_selinux_option(options):
     """Return True if options contains an SELinux relabel option (z or Z)."""
     return any(opt in ("z", "Z") for opt in options.split(","))
-
-
-def _is_inline_script(value):
-    """Return True if a script value looks like inline script content.
-
-    Multi-line strings and strings starting with a shebang are treated as
-    inline content; everything else is treated as a file path.
-    """
-    if not isinstance(value, str):
-        return False
-    value = value.strip()
-    return "\n" in value or value.startswith("#!")
 
 
 def _format_mount_spec(mount):
