@@ -48,6 +48,19 @@ base_image = "astral/uv:python3.14-trixie"
 
 The image is passed to the build as the `CAULDRON_BASE` build argument, so custom Dockerfiles can use `FROM ${CAULDRON_BASE}`.
 
+### FUSE device for nested containers
+
+To run nested rootless containers that use FUSE-based storage, enable the
+device under `[container]`:
+
+```toml
+[container]
+fuse_device = true
+```
+
+The default is disabled. Recreate the project container after changing this
+setting, for example with `cauldron up --build`.
+
 ### Environment variables
 
 Use the `[env]` table to set environment variables inside the container. This is useful for extending the `PATH` for tools installed by a custom Dockerfile, such as OpenCode installed with its default curl installer.

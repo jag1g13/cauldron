@@ -279,6 +279,11 @@ def container_known_hosts(config):
     return list(config.get("container", {}).get("known_hosts", []))
 
 
+def container_fuse_device(config):
+    """Return whether to pass the host's FUSE device into the container."""
+    return config.get("container", {}).get("fuse_device", False)
+
+
 def container_scripts(config):
     """Return lifecycle scripts from config.
 

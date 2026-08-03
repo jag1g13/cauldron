@@ -287,6 +287,7 @@ def run_container(
     mounts=None,
     ports=None,
     known_hosts=None,
+    fuse_device=False,
     entrypoint=False,
 ):
     """Create and start a detached container with the standard mounts.
@@ -298,6 +299,8 @@ def run_container(
     ``ports`` is a list of strings in Podman's ``-p`` syntax.
     ``known_hosts`` is a list of strings in ``hostname:ip`` format, passed to
     Podman's ``--add-host`` flag.
+    ``fuse_device`` passes ``/dev/fuse`` into the container for nested
+    rootless containers using FUSE storage.
 
     When ``entrypoint`` is True, the image's configured entrypoint is used and
     no default ``sleep infinity`` command is appended. This is used when the
@@ -326,6 +329,9 @@ def run_container(
     ]
 
     args.extend(["-e", f"HOME={CONTAINER_HOME}"])
+
+    if fuse_device:
+        args.extend(["--device", "/dev/fuse"])
 
     selinux = _selinux_enabled()
     for mount in mounts or []:

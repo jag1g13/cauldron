@@ -525,6 +525,7 @@ def test_init_creates_cauldron_directory_and_templates():
         assert "mounts" in content
         assert "ports" in content
         assert "known_hosts" in content
+        assert "# fuse_device = true" in content
         assert ".gitconfig" in content
         assert "SSH_AUTH_SOCK" in content
 
@@ -663,6 +664,38 @@ entrypoint = "entrypoint.sh"
         assert result.exit_code == 0
         _, kwargs = mock_run.call_args
         assert kwargs.get("entrypoint") is True
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=False)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_passes_fuse_device_option(
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_base,
+    mock_image,
+    mock_container,
+    tmp_path,
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[container]
+fuse_device = true
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 0
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("fuse_device") is True
 
 
 @patch("cauldron.podman.container_exists", return_value=False)

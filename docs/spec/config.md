@@ -22,6 +22,20 @@ Override the default Debian base image. The configured image is passed to the bu
 base_image = "astral/uv:python3.14-trixie"
 ```
 
+#### `fuse_device`
+
+Pass the host's `/dev/fuse` device into the container. Enable this when the
+container needs to run nested rootless containers with FUSE-based storage.
+The default is `false`.
+
+```toml
+[container]
+fuse_device = true
+```
+
+This option only affects newly created containers. Recreate the container after
+changing it, for example with `cauldron up --build`.
+
 #### `mounts`
 
 Mount additional files or directories into the container. Each entry can be either an inline table or a Docker short-syntax string.

@@ -346,6 +346,14 @@ def test_container_known_hosts_returns_empty_when_missing():
     assert config.container_known_hosts({}) == []
 
 
+def test_container_fuse_device_returns_configured_value():
+    assert config.container_fuse_device({"container": {"fuse_device": True}}) is True
+
+
+def test_container_fuse_device_returns_false_when_missing():
+    assert config.container_fuse_device({}) is False
+
+
 def test_container_scripts_returns_configured_scripts():
     cfg = {
         "scripts": {

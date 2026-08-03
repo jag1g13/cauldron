@@ -17,6 +17,7 @@
 
 [container]
 # base_image = "docker.io/astral/uv:python3.14-trixie"
+# fuse_device = true  # pass /dev/fuse through for nested rootless containers
 
 # mounts = [
 #   {source = "$HOME/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},

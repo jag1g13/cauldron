@@ -441,6 +441,39 @@ def test_run_container_adds_known_hosts():
         assert "registry.internal:10.0.0.5" in args
 
 
+def test_run_container_passes_fuse_device_when_enabled():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            fuse_device=True,
+        )
+        args = mock_run.call_args[0][0]
+        assert args[args.index("--device") : args.index("--device") + 2] == [
+            "--device",
+            "/dev/fuse",
+        ]
+
+
+def test_run_container_does_not_pass_fuse_device_by_default():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+        )
+        assert "--device" not in mock_run.call_args[0][0]
+
+
 def test_run_container_warns_when_selinux_enabled_and_no_label():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0

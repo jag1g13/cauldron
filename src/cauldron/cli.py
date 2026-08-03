@@ -222,6 +222,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         mounts=config.container_mounts(cfg),
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
+        fuse_device=config.container_fuse_device(cfg),
         entrypoint=has_entrypoint,
     ):
         raise click.ClickException(f"Failed to start container {container}.")
