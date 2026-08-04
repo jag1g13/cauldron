@@ -205,7 +205,7 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
             "USER root",
             f"RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron",
             "RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*",
-            f"RUN mkdir -p /run/sshd /home/cauldron/.ssh && chown {uid}:{gid} /home/cauldron/.ssh && chmod 700 /home/cauldron/.ssh",
+            f"RUN mkdir -p /run/sshd /home/cauldron/.ssh /home/cauldron/.config && chown {uid}:{gid} /home/cauldron/.ssh /home/cauldron/.config && chmod 700 /home/cauldron/.ssh",
             f"ENV HOME={CONTAINER_HOME}",
         ]
 

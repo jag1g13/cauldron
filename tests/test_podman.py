@@ -369,6 +369,25 @@ def test_run_container_mounts_defaults():
         assert args[-2:] == ["sleep", "infinity"]
 
 
+def test_build_project_image_owns_config_directory():
+    dockerfile_content = []
+
+    def capture_build(_tag, dockerfile, _context, build_args=None):
+        dockerfile_content.append(dockerfile.read_text())
+        return True
+
+    with patch("cauldron.podman.build_image", side_effect=capture_build):
+        assert podman.build_project_image(
+            tag="cauldron-foo:latest",
+            uid="1000",
+            gid="1000",
+            project_dir="/home/deck/projects/foo",
+        )
+
+    assert "/home/cauldron/.config" in dockerfile_content[0]
+    assert "chown 1000:1000 /home/cauldron/.ssh /home/cauldron/.config" in dockerfile_content[0]
+
+
 def test_run_container_adds_project_label():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0
