@@ -144,6 +144,8 @@ Runs a command inside the project's container. If the container is not running, 
 | Option | Description |
 |---|---|
 | `--name NAME` | Execute in `NAME` instead of the default project container. |
+| `--interactive`, `--no-interactive` | Enable or disable stdin attachment. Defaults to whether stdin is a terminal. |
+| `--tty`, `--no-tty` | Enable or disable pseudo-TTY allocation. Defaults to whether stdout is a terminal. |
 
 ### Behaviour
 
@@ -200,6 +202,9 @@ cauldron exec
 
 # Run a one-off command
 cauldron exec -- make test
+
+# Run OpenCode's ACP server over stdin/stdout
+cauldron exec --interactive --no-tty opencode acp
 
 # Open the project in VSCode
 cauldron code

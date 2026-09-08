@@ -337,6 +337,37 @@ def test_exec_runs_command_in_running_container(mock_exec, mock_running, mock_ex
 
 @patch("cauldron.podman.container_exists", return_value=True)
 @patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=0)
+def test_exec_options_enable_interactive_without_tty(
+    mock_exec, mock_running, mock_exists
+):
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["exec", "--interactive", "--no-tty", "opencode", "acp"]
+    )
+
+    assert result.exit_code == 0
+    _, kwargs = mock_exec.call_args
+    assert kwargs["interactive"] is True
+    assert kwargs["tty"] is False
+    assert kwargs["args"] == ("acp",)
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=0)
+def test_exec_options_disable_interactive_and_tty(mock_exec, mock_running, mock_exists):
+    runner = CliRunner()
+    result = runner.invoke(cli, ["exec", "--no-interactive", "--no-tty", "sh"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_exec.call_args
+    assert kwargs["interactive"] is False
+    assert kwargs["tty"] is False
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.podman.exec_in_container", return_value=42)
 def test_exec_propagates_nonzero_exit_code(mock_exec, mock_running, mock_exists):
     runner = CliRunner()

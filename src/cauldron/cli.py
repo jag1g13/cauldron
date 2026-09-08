@@ -318,9 +318,19 @@ def ps(all_containers):
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})
 @click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
+@click.option(
+    "--interactive/--no-interactive",
+    default=None,
+    help="Enable or disable stdin attachment (default: based on stdin).",
+)
+@click.option(
+    "--tty/--no-tty",
+    default=None,
+    help="Enable or disable pseudo-TTY allocation (default: based on stdout).",
+)
 @click.argument("command", required=False, default=None)
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def exec_command(name, command, args):
+def exec_command(name, interactive, tty, command, args):
     """Run a command or open a shell in the project's container.
 
     If the container is not running, it is started first.
@@ -328,7 +338,11 @@ def exec_command(name, command, args):
     container = project.container_name(override=name)
     _start_project_container(container)
 
-    interactive, tty = _tty_flags()
+    detected_interactive, detected_tty = _tty_flags()
+    if interactive is None:
+        interactive = detected_interactive
+    if tty is None:
+        tty = detected_tty
 
     if command is None:
         command = podman.container_shell(container)
