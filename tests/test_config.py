@@ -425,3 +425,96 @@ def test_set_base_image_preserves_other_keys(tmp_path, monkeypatch):
     assert 'EDITOR = "vim"' in content
     assert "my-service.local:127.0.0.1" in content
     assert "5.0-24" in content
+
+
+def test_container_scripts_returns_configured_scripts():
+    cfg = {
+        "scripts": {
+            "post_build": "post_build.sh",
+            "post_start": "post-start.sh",
+            "entrypoint": "entrypoint.sh",
+        }
+    }
+    assert config.container_scripts(cfg) == cfg["scripts"]
+
+
+def test_container_scripts_returns_empty_when_missing():
+    assert config.container_scripts({}) == {}
+
+
+def test_load_config_merges_scripts_project_over_global(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[scripts]
+post_build = "global-build.sh"
+post_start = "global-start.sh"
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[scripts]
+post_build = "project-build.sh"
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir)
+
+    assert loaded["scripts"]["post_build"] == "project-build.sh"
+    assert loaded["scripts"]["post_start"] == "global-start.sh"
+
+
+def test_load_config_warns_on_unknown_script_hook(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[scripts]
+unknown_hook = "echo bad"
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+
+    warnings = []
+    loaded = config.load_config(project_dir, warn=warnings.append)
+    assert any("Unknown script hook" in w for w in warnings)
+    assert "unknown_hook" not in loaded.get("scripts", {})
+
+
+def test_resolve_script_prefers_project_script(tmp_path, monkeypatch):
+    global_dir = tmp_path / "home" / ".config" / "cauldron"
+    global_dir.mkdir(parents=True)
+    global_config = global_dir / "cauldron.toml"
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_config)
+
+    project_dir = tmp_path / "project"
+    project_scripts = project_dir / ".cauldron"
+    project_scripts.mkdir(parents=True)
+    project_script = project_scripts / "setup.sh"
+    project_script.write_text("project")
+    (global_dir / "setup.sh").write_text("global")
+
+    assert config.resolve_script("setup.sh", project_dir) == project_script
+
+
+def test_resolve_script_falls_back_to_global_script(tmp_path, monkeypatch):
+    global_dir = tmp_path / "home" / ".config" / "cauldron"
+    global_dir.mkdir(parents=True)
+    global_config = global_dir / "cauldron.toml"
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_config)
+
+    project_dir = tmp_path / "project"
+    (project_dir / ".cauldron").mkdir(parents=True)
+    global_script = global_dir / "setup.sh"
+    global_script.write_text("global")
+
+    assert config.resolve_script("setup.sh", project_dir) == global_script
+
+
+def test_resolve_script_rejects_paths(tmp_path):
+    with pytest.raises(ValueError, match="must be a filename"):
+        config.resolve_script(".cauldron/setup.sh", tmp_path)

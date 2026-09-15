@@ -119,6 +119,21 @@ PORT = 8080
 
 Values are passed as strings. `PATH` values may use `${PATH}` as a placeholder; Cauldron expands it to the image's default `PATH` when starting the container. Host environment variables (e.g. `$HOME`, `$SSH_AUTH_SOCK`) are expanded in all other env values. Project env values override global env values at the key level.
 
+### `[scripts]` — lifecycle scripts
+
+Configure the Bash scripts used at lifecycle points:
+
+```toml
+[scripts]
+post_build = "post_build.sh"
+post_start = "post-start.sh"
+entrypoint = "entrypoint.sh"
+```
+
+Script names are resolved from the project's `.cauldron/` directory first, then
+the global `~/.config/cauldron/` directory. `post_build` runs during image build
+as the `cauldron` user; `post_start` and `entrypoint` run in the container.
+
 ## Example project config
 
 ```toml

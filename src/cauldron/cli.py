@@ -73,15 +73,50 @@ def init():
         config_file.write_text(_read_data_file("cauldron.toml"))
         click.echo(f"Created {rel_dir / 'cauldron.toml'}")
 
+    post_build = cauldron_dir / "post_build.sh"
+    if post_build.exists():
+        click.echo(f"Keeping existing {rel_dir / 'post_build.sh'}")
+    else:
+        post_build.write_text(_read_data_file("post_build.sh"))
+        post_build.chmod(0o755)
+        click.echo(f"Created {rel_dir / 'post_build.sh'}")
+
 
 def _tty_flags():
     """Return (interactive, tty) based on the current stdin/stdout."""
     return sys.stdin.isatty(), sys.stdout.isatty()
 
 
+SCRIPT_INSTALL_PATH = "/usr/local/share/cauldron"
+
+
+def _run_lifecycle_hook(container, hook, scripts):
+    """Run a lifecycle hook script inside the container if configured.
+
+    Returns True if the hook is not configured or exits successfully.
+    Streams hook output to the terminal.
+    """
+    if hook not in scripts:
+        return True
+    script_path = f"{SCRIPT_INSTALL_PATH}/{hook}.sh"
+    click.echo(f"Running {hook} script...")
+    return podman.exec_hook_in_container(container, script_path) == 0
+
+
+def _build_ok(result):
+    """Return True if a Podman build result indicates success.
+
+    ``build_project_image`` returns a ``subprocess.CompletedProcess`` so the
+    caller can inspect ``stderr``; a plain bool is also accepted.
+    """
+    if isinstance(result, bool):
+        return result
+    return result.returncode == 0
+
+
 def _stderr_suffix(result):
     """Format captured stderr for appending to an error message."""
-    stderr = (result.stderr or "").strip()
+    stderr = (getattr(result, "stderr", "") or "").strip()
     return f"\n{stderr}" if stderr else ""
 
 
@@ -99,7 +134,7 @@ def _recover_template_base(result, base_image, project_dir):
     error) when the failure is not a template issue, no replacement can be
     verified, or the user declines.
     """
-    stderr = result.stderr or ""
+    stderr = getattr(result, "stderr", "") or ""
     if not (
         devcontainers.is_template_manifest_error(stderr)
         and devcontainers.is_template_image(base_image)
@@ -147,6 +182,9 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     When ``restart`` is true, an existing container is restarted instead of
     being left running. If ``build`` is also true, the existing container is
     removed so it can be recreated from the rebuilt image.
+
+    Configured lifecycle scripts are copied into the image at build time and
+    executed at the appropriate lifecycle points.
     """
     if build and no_build:
         raise click.ClickException("--build and --no-build cannot be used together.")
@@ -156,6 +194,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     uid, gid = project.host_user()
     cfg = config.load_config(project_dir)
     base_image = config.base_image(cfg)
+    scripts = config.container_scripts(cfg)
+    has_entrypoint = "entrypoint" in scripts
 
     if podman.container_exists(container):
         if restart:
@@ -182,6 +222,10 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                     raise click.ClickException(
                         f"Container {container} did not restart."
                     )
+                if not _run_lifecycle_hook(container, "post_start", scripts):
+                    raise click.ClickException(
+                        f"post_start script failed for {container}."
+                    )
                 click.echo(f"Container {container} is running.")
                 return
         else:
@@ -192,6 +236,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 raise click.ClickException(f"Failed to start container {container}.")
             if not podman.container_running(container):
                 raise click.ClickException(f"Container {container} did not start.")
+            if not _run_lifecycle_hook(container, "post_start", scripts):
+                raise click.ClickException(f"post_start script failed for {container}.")
             click.echo(f"Container {container} is running.")
             return
 
@@ -236,15 +282,29 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                     )
 
         project_base = intermediate or resolved_base
-        result = podman.build_project_image(image, uid, gid, project_base)
-        if result.returncode != 0:
+        result = podman.build_project_image(
+            image,
+            uid,
+            gid,
+            project_base,
+            scripts=scripts,
+            project_dir=project_dir,
+        )
+        if not _build_ok(result):
             new_base = _recover_template_base(result, project_base, project_dir)
             if new_base:
                 if not podman.ensure_base_image(new_base):
                     raise click.ClickException("Failed to ensure base image.")
                 click.echo(f"Retrying project image build with {new_base}...")
-                result = podman.build_project_image(image, uid, gid, new_base)
-            if result.returncode != 0:
+                result = podman.build_project_image(
+                    image,
+                    uid,
+                    gid,
+                    new_base,
+                    scripts=scripts,
+                    project_dir=project_dir,
+                )
+            if not _build_ok(result):
                 raise click.ClickException(
                     f"Failed to build project image.{_stderr_suffix(result)}"
                 )
@@ -262,11 +322,15 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         mounts=config.container_mounts(cfg),
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
+        entrypoint=has_entrypoint,
     ):
         raise click.ClickException(f"Failed to start container {container}.")
 
     if not podman.container_running(container):
         raise click.ClickException(f"Container {container} did not start.")
+
+    if not _run_lifecycle_hook(container, "post_start", scripts):
+        raise click.ClickException(f"post_start script failed for {container}.")
 
     click.echo(f"Container {container} is running.")
 
@@ -354,9 +418,19 @@ def ps(all_containers):
 
 @cli.command("exec", context_settings={"ignore_unknown_options": True})
 @click.option("--name", help="Container name (default: cauldron-<project-dir-name>).")
+@click.option(
+    "--interactive/--no-interactive",
+    default=None,
+    help="Enable or disable stdin attachment (default: based on stdin).",
+)
+@click.option(
+    "--tty/--no-tty",
+    default=None,
+    help="Enable or disable pseudo-TTY allocation (default: based on stdout).",
+)
 @click.argument("command", required=False, default=None)
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def exec_command(name, command, args):
+def exec_command(name, interactive, tty, command, args):
     """Run a command or open a shell in the project's container.
 
     If the container is not running, it is started first.
@@ -364,7 +438,11 @@ def exec_command(name, command, args):
     container = project.container_name(override=name)
     _start_project_container(container)
 
-    interactive, tty = _tty_flags()
+    detected_interactive, detected_tty = _tty_flags()
+    if interactive is None:
+        interactive = detected_interactive
+    if tty is None:
+        tty = detected_tty
 
     if command is None:
         command = podman.container_shell(container)

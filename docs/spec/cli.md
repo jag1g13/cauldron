@@ -49,6 +49,7 @@ Creates a `.cauldron` directory in the current project with template files:
 
 - `.cauldron/Dockerfile` – a starting Dockerfile with `ARG CAULDRON_BASE` and `FROM ${CAULDRON_BASE}`.
 - `.cauldron/cauldron.toml` – a starting configuration file with `[container]` and `[env]` sections, including commented examples for Git and SSH agent passthrough and known-hosts entries.
+- `.cauldron/post_build.sh` – a Bash script template with `set -euxo pipefail` for image build setup.
 
 If the files already exist, they are left untouched and a message is printed.
 
@@ -143,6 +144,8 @@ Runs a command inside the project's container. If the container is not running, 
 | Option | Description |
 |---|---|
 | `--name NAME` | Execute in `NAME` instead of the default project container. |
+| `--interactive`, `--no-interactive` | Enable or disable stdin attachment. Defaults to whether stdin is a terminal. |
+| `--tty`, `--no-tty` | Enable or disable pseudo-TTY allocation. Defaults to whether stdout is a terminal. |
 
 ### Behaviour
 
@@ -199,6 +202,9 @@ cauldron exec
 
 # Run a one-off command
 cauldron exec -- make test
+
+# Run OpenCode's ACP server over stdin/stdout
+cauldron exec --interactive --no-tty opencode acp
 
 # Open the project in VSCode
 cauldron code
