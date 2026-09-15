@@ -385,7 +385,10 @@ def test_build_project_image_owns_config_directory():
         )
 
     assert "/home/cauldron/.config" in dockerfile_content[0]
-    assert "chown 1000:1000 /home/cauldron/.ssh /home/cauldron/.config" in dockerfile_content[0]
+    assert (
+        "chown 1000:1000 /home/cauldron/.ssh /home/cauldron/.config"
+        in dockerfile_content[0]
+    )
 
 
 def test_run_container_adds_project_label():
