@@ -19,6 +19,9 @@ def _expand_host_vars(value):
     return os.path.expandvars(value)
 
 
+KNOWN_HOOKS = ("post_build", "post_start", "entrypoint")
+
+
 def _load(path):
     """Load a TOML file, returning an empty dict if it is missing."""
     if not path.exists():
@@ -177,6 +180,16 @@ def load_config(project_dir=None, warn=None):
     if "env" in project_config:
         config.setdefault("env", {}).update(project_config["env"])
 
+    if "scripts" in project_config:
+        config.setdefault("scripts", {}).update(project_config["scripts"])
+
+    for key in list(config.get("scripts", {}).keys()):
+        if key not in KNOWN_HOOKS:
+            warn(f"Unknown script hook {key!r} ignored")
+            del config["scripts"][key]
+        elif not isinstance(config["scripts"][key], str):
+            raise ValueError(f"Script value for {key!r} must be a string")
+
     global_container = config.get("container", {})
     project_container = project_config.get("container", {})
 
@@ -264,3 +277,40 @@ def container_known_hosts(config):
     ``--add-host`` flag to append entries to the container's ``/etc/hosts``.
     """
     return list(config.get("container", {}).get("known_hosts", []))
+
+
+def container_scripts(config):
+    """Return lifecycle scripts from config.
+
+    Returns a dict mapping hook names (``post_build``, ``post_start``,
+    ``entrypoint``) to script names. Project values override global values at
+    the key level.
+    """
+    return dict(config.get("scripts", {}))
+
+
+def resolve_script(value, project_dir):
+    """Resolve a configured script name from project or global config.
+
+    Project scripts take precedence over global scripts. Script values must be
+    simple filenames so lifecycle scripts cannot escape either config directory.
+    """
+    if not isinstance(value, str):
+        raise ValueError(f"Script value must be a string, got {type(value).__name__}")
+
+    name = pathlib.Path(value)
+    if name.name != value or not value:
+        raise ValueError(
+            "Script name must be a filename in the project or global config directory"
+        )
+
+    project_scripts = pathlib.Path(project_dir).resolve() / CONFIG_PROJECT_PATH.parent
+    global_scripts = CONFIG_GLOBAL_PATH.parent
+    for directory in (project_scripts, global_scripts):
+        path = directory / value
+        if path.is_file():
+            return path
+
+    raise FileNotFoundError(
+        f"Script {value!r} was not found in {project_scripts} or {global_scripts}"
+    )

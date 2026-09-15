@@ -510,6 +510,7 @@ def test_init_creates_cauldron_directory_and_templates():
         assert result.exit_code == 0
         assert "Created .cauldron/Dockerfile" in result.output
         assert "Created .cauldron/cauldron.toml" in result.output
+        assert "Created .cauldron/post_build.sh" in result.output
 
         dockerfile = pathlib.Path(".cauldron/Dockerfile")
         assert dockerfile.exists()
@@ -527,6 +528,174 @@ def test_init_creates_cauldron_directory_and_templates():
         assert ".gitconfig" in content
         assert "SSH_AUTH_SOCK" in content
 
+        script = pathlib.Path(".cauldron/post_build.sh")
+        assert script.read_text() == (
+            "#!/bin/bash\n"
+            "# Add commands required to prepare the project image here.\n"
+            "set -euxo pipefail\n"
+        )
+        assert script.stat().st_mode & 0o111
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=False)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.exec_hook_in_container", return_value=0)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_runs_post_start_but_not_post_build_in_container(
+    mock_dockerfile,
+    mock_exec,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_base,
+    mock_image,
+    mock_container,
+    tmp_path,
+    monkeypatch,
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[scripts]
+post_build = "post_build.sh"
+post_start = "post-start.sh"
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 0
+        mock_build.assert_called_once()
+        mock_run.assert_called_once()
+        assert mock_exec.call_count == 1
+        script_paths = [args[0][1] for args in mock_exec.call_args_list]
+        assert "/usr/local/share/cauldron/post_start.sh" in script_paths
+        assert mock_build.call_args.kwargs["scripts"] == {
+            "post_build": "post_build.sh",
+            "post_start": "post-start.sh",
+        }
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", side_effect=[False, True])
+@patch("cauldron.podman.start_container", return_value=True)
+@patch("cauldron.podman.exec_in_container", return_value=0)
+@patch("cauldron.podman.exec_hook_in_container", return_value=0)
+def test_exec_runs_post_start_when_starting_stopped_container(
+    mock_hook, mock_exec, mock_start, mock_running, mock_exists, tmp_path, monkeypatch
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[scripts]
+post_start = "post-start.sh"
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["exec", "whoami"])
+        assert result.exit_code == 0
+        mock_start.assert_called_once()
+        hook_calls = [
+            call
+            for call in mock_hook.call_args_list
+            if call[0][1] == "/usr/local/share/cauldron/post_start.sh"
+        ]
+        assert len(hook_calls) == 1
+
+
+@patch("cauldron.podman.container_exists", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.podman.restart_container", return_value=True)
+@patch("cauldron.podman.exec_hook_in_container", return_value=0)
+def test_up_runs_post_start_when_restarting_container(
+    mock_exec, mock_restart, mock_running, mock_exists, tmp_path, monkeypatch
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[scripts]
+post_start = "echo start"
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 0
+        mock_restart.assert_called_once()
+        mock_exec.assert_called_once()
+        args, _kwargs = mock_exec.call_args
+        assert args[1] == "/usr/local/share/cauldron/post_start.sh"
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=False)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_passes_entrypoint_flag_when_entrypoint_configured(
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_base,
+    mock_image,
+    mock_container,
+    tmp_path,
+    monkeypatch,
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[scripts]
+entrypoint = "entrypoint.sh"
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 0
+        _, kwargs = mock_run.call_args
+        assert kwargs.get("entrypoint") is True
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=False)
+@patch("cauldron.podman.ensure_base_image", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=False)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_fails_when_post_build_image_build_fails(
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_base,
+    mock_image,
+    mock_container,
+    tmp_path,
+    monkeypatch,
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[scripts]
+post_build = "post_build.sh"
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code != 0
+        assert "Failed to build project image" in result.output
+
 
 def test_init_keeps_existing_files():
     runner = CliRunner()
@@ -534,13 +703,16 @@ def test_init_keeps_existing_files():
         pathlib.Path(".cauldron").mkdir()
         pathlib.Path(".cauldron/Dockerfile").write_text("FROM custom\n")
         pathlib.Path(".cauldron/cauldron.toml").write_text('[env]\nFOO = "bar"\n')
+        pathlib.Path(".cauldron/post_build.sh").write_text("custom\n")
 
         result = runner.invoke(cli, ["init"])
         assert result.exit_code == 0
         assert "Keeping existing .cauldron/Dockerfile" in result.output
         assert "Keeping existing .cauldron/cauldron.toml" in result.output
+        assert "Keeping existing .cauldron/post_build.sh" in result.output
         assert pathlib.Path(".cauldron/Dockerfile").read_text() == "FROM custom\n"
         assert (
             pathlib.Path(".cauldron/cauldron.toml").read_text()
             == '[env]\nFOO = "bar"\n'
         )
+        assert pathlib.Path(".cauldron/post_build.sh").read_text() == "custom\n"

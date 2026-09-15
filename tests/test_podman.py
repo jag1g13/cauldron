@@ -575,6 +575,38 @@ def test_exec_in_container_returns_podman_not_found():
         assert podman.exec_in_container("cauldron-foo", "ls") == 1
 
 
+def test_exec_hook_in_container_streams_output_when_verbose():
+    podman.set_verbose(True)
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 0
+        mock_run.assert_called_once_with(
+            ["podman", "exec", "cauldron-foo", "/script.sh"]
+        )
+
+
+def test_exec_hook_in_container_captures_output_when_not_verbose():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 0
+        mock_run.assert_called_once_with(
+            ["podman", "exec", "cauldron-foo", "/script.sh"],
+            capture_output=True,
+            text=True,
+        )
+
+
+def test_exec_hook_in_container_returns_exit_code():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 7
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 7
+
+
+def test_exec_hook_in_container_returns_podman_not_found():
+    with patch("subprocess.run", side_effect=FileNotFoundError()):
+        assert podman.exec_hook_in_container("cauldron-foo", "/script.sh") == 1
+
+
 def test_list_containers_parses_podman_ps_json():
     json_output = """[
         {
@@ -599,3 +631,134 @@ def test_list_containers_returns_empty_on_failure():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 1
         assert podman.list_containers() == []
+
+
+def test_build_project_image_copies_scripts_and_runs_post_build(tmp_path):
+    captured = {"content": None, "args": None}
+
+    def capture_build(_tag, dockerfile, _context, build_args=None):
+        captured["content"] = dockerfile.read_text()
+        captured["args"] = build_args
+        return True
+
+    script_dir = tmp_path / ".cauldron"
+    script_dir.mkdir()
+    (script_dir / "post_build.sh").write_text("#!/bin/bash\necho build")
+    (script_dir / "post-start.sh").write_text("#!/bin/bash\necho start")
+    scripts = {"post_build": "post_build.sh", "post_start": "post-start.sh"}
+
+    with patch("cauldron.podman.build_image", side_effect=capture_build):
+        assert (
+            podman.build_project_image(
+                "cauldron-proj:latest",
+                "1000",
+                "1000",
+                scripts=scripts,
+                project_dir=tmp_path,
+            )
+            is True
+        )
+
+    content = captured["content"]
+    assert "COPY post_build.sh /usr/local/share/cauldron/post_build.sh" in content
+    assert "RUN chmod +x /usr/local/share/cauldron/post_build.sh" in content
+    assert "COPY post_start.sh /usr/local/share/cauldron/post_start.sh" in content
+    assert "USER cauldron" in content
+    assert "ARG CAULDRON_RUN_POST_BUILD=false" in content
+    assert (
+        'RUN if [ "$CAULDRON_RUN_POST_BUILD" = "true" ]; then /usr/local/share/cauldron/post_build.sh; fi'
+        in content
+    )
+    assert captured["args"] == {
+        "CAULDRON_BASE": podman.BASE_IMAGE,
+        "CAULDRON_RUN_POST_BUILD": "true",
+    }
+
+
+def test_build_project_image_copies_file_scripts(tmp_path):
+    captured = {"content": None}
+
+    def capture_build(_tag, dockerfile, _context, build_args=None):
+        captured["content"] = dockerfile.read_text()
+        return True
+
+    script_file = tmp_path / ".cauldron" / "post-start.sh"
+    script_file.parent.mkdir(parents=True)
+    script_file.write_text("#!/bin/bash\necho start")
+
+    scripts = {"post_start": "post-start.sh"}
+
+    with patch("cauldron.podman.build_image", side_effect=capture_build):
+        assert (
+            podman.build_project_image(
+                "cauldron-proj:latest",
+                "1000",
+                "1000",
+                scripts=scripts,
+                project_dir=tmp_path,
+            )
+            is True
+        )
+
+    content = captured["content"]
+    assert "COPY post_start.sh /usr/local/share/cauldron/post_start.sh" in content
+
+
+def test_build_project_image_sets_entrypoint(tmp_path):
+    captured = {"content": None}
+
+    def capture_build(_tag, dockerfile, _context, build_args=None):
+        captured["content"] = dockerfile.read_text()
+        return True
+
+    script_dir = tmp_path / ".cauldron"
+    script_dir.mkdir()
+    (script_dir / "entrypoint.sh").write_text('#!/bin/bash\nexec "$@"')
+    scripts = {"entrypoint": "entrypoint.sh"}
+
+    with patch("cauldron.podman.build_image", side_effect=capture_build):
+        assert (
+            podman.build_project_image(
+                "cauldron-proj:latest",
+                "1000",
+                "1000",
+                scripts=scripts,
+                project_dir=tmp_path,
+            )
+            is True
+        )
+
+    assert (
+        'ENTRYPOINT ["/usr/local/share/cauldron/entrypoint.sh"]' in captured["content"]
+    )
+
+
+def test_run_container_appends_sleep_infinity_by_default():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+        )
+        args = mock_run.call_args[0][0]
+        assert args[-2:] == ["sleep", "infinity"]
+
+
+def test_run_container_omits_sleep_when_entrypoint_set():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            entrypoint=True,
+        )
+        args = mock_run.call_args[0][0]
+        assert "sleep" not in args

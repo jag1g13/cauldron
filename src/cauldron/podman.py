@@ -6,6 +6,7 @@ import tempfile
 import threading
 import warnings
 
+from cauldron import config as config_module
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
@@ -167,28 +168,69 @@ def build_image(tag, dockerfile, context, build_args=None):
     return result.returncode == 0
 
 
-def build_project_image(tag, uid, gid, base_image=None):
+def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_dir=None):
     """Build the final project image with the host user configured.
 
     The base image is supplied through the ``CAULDRON_BASE`` build argument.
     The resulting image creates a user matching the host UID/GID and sets
     HOME to /home/cauldron.
 
+    If ``scripts`` is provided, each named Bash script is copied into the image
+    as an executable script at ``/usr/local/share/cauldron/<hook>.sh``. Project
+    scripts take precedence over global scripts. The ``post_build`` hook runs
+    as the final build step as the ``cauldron`` user. If an ``entrypoint`` hook
+    is present, the image entrypoint is set to run it.
+
     Returns True on success.
     """
     base = base_image or BASE_IMAGE
-    dockerfile_content = f"""ARG CAULDRON_BASE
-FROM ${{CAULDRON_BASE}}
-USER root
-RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /run/sshd /home/cauldron/.ssh && chown {uid}:{gid} /home/cauldron/.ssh && chmod 700 /home/cauldron/.ssh
-ENV HOME={CONTAINER_HOME}
-"""
+    scripts = scripts or {}
+    project_dir = pathlib.Path(project_dir or ".").resolve()
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        dockerfile = pathlib.Path(tmpdir) / "Dockerfile"
-        dockerfile.write_text(dockerfile_content)
-        return build_image(tag, dockerfile, tmpdir, build_args={"CAULDRON_BASE": base})
+        tmpdir = pathlib.Path(tmpdir)
+        script_files = {}
+
+        for hook, value in scripts.items():
+            path = config_module.resolve_script(value, project_dir)
+            content = path.read_text()
+
+            script_path = tmpdir / f"{hook}.sh"
+            script_path.write_text(content)
+            script_files[hook] = f"{hook}.sh"
+
+        lines = [
+            "ARG CAULDRON_BASE",
+            "FROM ${CAULDRON_BASE}",
+            "USER root",
+            f"RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron",
+            "RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*",
+            f"RUN mkdir -p /run/sshd /home/cauldron/.ssh && chown {uid}:{gid} /home/cauldron/.ssh && chmod 700 /home/cauldron/.ssh",
+            f"ENV HOME={CONTAINER_HOME}",
+        ]
+
+        for hook, filename in script_files.items():
+            lines.append(f"COPY {filename} /usr/local/share/cauldron/{hook}.sh")
+            lines.append(f"RUN chmod +x /usr/local/share/cauldron/{hook}.sh")
+
+        lines.append("USER cauldron")
+
+        build_args = {"CAULDRON_BASE": base}
+        if "post_build" in script_files:
+            lines.extend(
+                [
+                    "ARG CAULDRON_RUN_POST_BUILD=false",
+                    'RUN if [ "$CAULDRON_RUN_POST_BUILD" = "true" ]; then /usr/local/share/cauldron/post_build.sh; fi',
+                ]
+            )
+            build_args["CAULDRON_RUN_POST_BUILD"] = "true"
+
+        if "entrypoint" in script_files:
+            lines.append('ENTRYPOINT ["/usr/local/share/cauldron/entrypoint.sh"]')
+
+        dockerfile = tmpdir / "Dockerfile"
+        dockerfile.write_text("\n".join(lines) + "\n")
+        return build_image(tag, dockerfile, tmpdir, build_args=build_args)
 
 
 def container_exists(name):
@@ -245,6 +287,7 @@ def run_container(
     mounts=None,
     ports=None,
     known_hosts=None,
+    entrypoint=False,
 ):
     """Create and start a detached container with the standard mounts.
 
@@ -255,6 +298,10 @@ def run_container(
     ``ports`` is a list of strings in Podman's ``-p`` syntax.
     ``known_hosts`` is a list of strings in ``hostname:ip`` format, passed to
     Podman's ``--add-host`` flag.
+
+    When ``entrypoint`` is True, the image's configured entrypoint is used and
+    no default ``sleep infinity`` command is appended. This is used when the
+    user has configured a custom ``entrypoint`` lifecycle script.
 
     Git configuration and SSH agent forwarding are no longer handled here;
     add them as ordinary mounts and environment variables in the config file.
@@ -305,7 +352,8 @@ def run_container(
         args.extend(["-e", f"{key}={value}"])
 
     args.append(image)
-    args.extend(["sleep", "infinity"])
+    if not entrypoint:
+        args.extend(["sleep", "infinity"])
 
     return _run(args).returncode == 0
 
@@ -359,6 +407,24 @@ def exec_in_container(name, command, args=None, interactive=False, tty=False):
 
     try:
         return subprocess.run(cmd).returncode
+    except FileNotFoundError:
+        return 1
+
+
+def exec_hook_in_container(name, command):
+    """Run a non-interactive lifecycle hook inside a container.
+
+    When verbose mode is enabled the hook's output is streamed to the
+    terminal. Otherwise output is captured silently and only the exit code is
+    returned.
+
+    Returns the command's exit code.
+    """
+    cmd = ["podman", "exec", name, command]
+    try:
+        if _verbose:
+            return subprocess.run(cmd).returncode
+        return subprocess.run(cmd, capture_output=True, text=True).returncode
     except FileNotFoundError:
         return 1
 
