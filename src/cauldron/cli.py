@@ -4,7 +4,7 @@ import sys
 
 import click
 
-from cauldron import config, devcontainers, podman, project, ssh, vscode
+from cauldron import config, devcontainers, podman, podman_remote, project, ssh, vscode
 
 
 def _read_data_file(name):
@@ -195,6 +195,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     cfg = config.load_config(project_dir)
     base_image = config.base_image(cfg)
     scripts = config.container_scripts(cfg)
+    podman_socket = config.container_podman_socket(cfg)
     has_entrypoint = "entrypoint" in scripts
 
     if podman.container_exists(container):
@@ -311,6 +312,14 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
 
     click.echo(f"Starting container {container}...")
     container_env = config.container_env(cfg)
+    socket_path = None
+    client_path = None
+    if podman_socket:
+        try:
+            socket_path = podman_remote.ensure_socket()
+            client_path = podman_remote.ensure_client()
+        except podman_remote.RemoteError as exc:
+            raise click.ClickException(str(exc)) from exc
     if not podman.run_container(
         name=container,
         image=image,
@@ -322,6 +331,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         mounts=config.container_mounts(cfg),
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
+        podman_socket=socket_path,
+        podman_client=client_path,
         entrypoint=has_entrypoint,
     ):
         raise click.ClickException(f"Failed to start container {container}.")

@@ -1,0 +1,89 @@
+import pathlib
+from unittest.mock import patch
+
+import pytest
+
+from cauldron import podman_remote
+
+
+def test_asset_names_arch_suffixed_for_modern_versions():
+    names = podman_remote._asset_names("5.4.2", "amd64")
+    assert names[0] == "podman-remote-static-linux_amd64.tar.gz"
+    assert "podman-remote-static.tar.gz" in names
+
+
+def test_asset_names_neutral_for_old_versions():
+    names = podman_remote._asset_names("3.4.4", "amd64")
+    assert names[0] == "podman-remote-static.tar.gz"
+
+
+def test_server_version_strips_leading_v():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = "v3.4.4\n"
+        assert podman_remote.server_version() == "3.4.4"
+
+
+def test_server_version_returns_none_when_unavailable():
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stdout = ""
+        assert podman_remote.server_version() is None
+
+
+def test_ensure_socket_raises_when_missing(tmp_path):
+    with patch(
+        "cauldron.podman_remote.socket_path", return_value=tmp_path / "missing.sock"
+    ):
+        with pytest.raises(podman_remote.RemoteError, match="systemctl --user"):
+            podman_remote.ensure_socket()
+
+
+def test_ensure_socket_returns_path_when_present(tmp_path):
+    socket = tmp_path / "podman.sock"
+    socket.write_text("")
+    with patch("cauldron.podman_remote.socket_path", return_value=socket):
+        assert podman_remote.ensure_socket() == socket
+
+
+def test_ensure_client_uses_cached_binary(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    directory = podman_remote._cache_dir("5.4.2")
+    directory.mkdir(parents=True)
+    binary = directory / "podman"
+    binary.write_text("cached")
+
+    with patch("cauldron.podman_remote.server_version", return_value="5.4.2"):
+        assert podman_remote.ensure_client() == binary
+
+
+def test_ensure_client_downloads_and_extracts(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    version = "5.4.2"
+
+    def fake_download(_url, destination):
+        pathlib.Path(destination).write_bytes(b"archive")
+        return destination
+
+    class FakeArchive:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def extractall(self, directory, filter=None):
+            path = pathlib.Path(directory) / "podman"
+            path.write_text("binary")
+            path.chmod(0o644)
+
+    with patch("cauldron.podman_remote._fetch_checksums", return_value={}):
+        with patch("cauldron.podman_remote._download", side_effect=fake_download):
+            with patch(
+                "cauldron.podman_remote.tarfile.open", return_value=FakeArchive()
+            ):
+                binary = podman_remote.ensure_client(version=version, arch="amd64")
+
+    assert binary == podman_remote._cache_dir(version) / "podman"
+    assert binary.exists()
+    assert binary.stat().st_mode & 0o111

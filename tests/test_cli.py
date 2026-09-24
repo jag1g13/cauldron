@@ -7,7 +7,7 @@ from click.testing import CliRunner
 
 from cauldron.cli import cli
 from cauldron import podman as podman_module
-from cauldron import ssh
+from cauldron import podman_remote, ssh
 
 
 def _ok():
@@ -305,11 +305,13 @@ def test_up_build_rebuilds_and_replaces_existing_container(
     mock_stop,
     mock_running,
     mock_exists,
+    tmp_path,
 ):
-    runner = CliRunner()
-    result = runner.invoke(cli, ["up", "--build"])
-    assert result.exit_code == 0
-    assert "Stopping and removing" in result.output
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up", "--build"])
+        assert result.exit_code == 0
+        assert "Stopping and removing" in result.output
     mock_stop.assert_called_once()
     mock_remove.assert_called_once()
     mock_build.assert_called_once()
@@ -340,11 +342,13 @@ def test_up_builds_and_starts_container_when_image_missing(
     mock_base,
     mock_image,
     mock_container,
+    tmp_path,
 ):
-    runner = CliRunner()
-    result = runner.invoke(cli, ["up"])
-    assert result.exit_code == 0
-    assert "is running" in result.output
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 0
+        assert "is running" in result.output
     mock_build.assert_called_once()
     mock_run.assert_called_once()
 
@@ -387,11 +391,18 @@ base_image = "astral/uv:python3.14-trixie"
 @patch("cauldron.podman.container_running", return_value=True)
 @patch("cauldron.project.find_dockerfile", return_value=None)
 def test_up_skips_build_when_image_exists(
-    mock_dockerfile, mock_running, mock_run, mock_build, mock_image, mock_container
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_image,
+    mock_container,
+    tmp_path,
 ):
-    runner = CliRunner()
-    result = runner.invoke(cli, ["up"])
-    assert result.exit_code == 0
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["up"])
+        assert result.exit_code == 0
     mock_build.assert_not_called()
 
 
@@ -600,10 +611,12 @@ def test_exec_auto_starts_container_when_not_exists(
     mock_run,
     mock_image,
     mock_exists,
+    tmp_path,
 ):
-    runner = CliRunner()
-    result = runner.invoke(cli, ["exec", "whoami"])
-    assert result.exit_code == 0
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["exec", "whoami"])
+        assert result.exit_code == 0
     mock_run.assert_called_once()
     mock_exec.assert_called_once()
 
@@ -703,10 +716,12 @@ def test_code_auto_starts_container_when_not_exists(
     mock_run,
     mock_image,
     mock_exists,
+    tmp_path,
 ):
-    runner = CliRunner()
-    result = runner.invoke(cli, ["code"])
-    assert result.exit_code == 0
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["code"])
+        assert result.exit_code == 0
     mock_run.assert_called_once()
     mock_open.assert_called_once()
 
@@ -753,6 +768,7 @@ def test_init_creates_cauldron_directory_and_templates():
         assert "mounts" in content
         assert "ports" in content
         assert "known_hosts" in content
+        assert "# podman_socket = true" in content
         assert ".gitconfig" in content
         assert "SSH_AUTH_SOCK" in content
 
@@ -891,6 +907,81 @@ entrypoint = "entrypoint.sh"
         assert result.exit_code == 0
         _, kwargs = mock_run.call_args
         assert kwargs.get("entrypoint") is True
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_mounts_podman_socket(
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_image,
+    mock_container,
+    tmp_path,
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[container]
+podman_socket = true
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        with patch(
+            "cauldron.podman_remote.ensure_socket",
+            return_value="/run/user/1000/podman/podman.sock",
+        ):
+            with patch(
+                "cauldron.podman_remote.ensure_client",
+                return_value="/cache/podman",
+            ):
+                runner = CliRunner()
+                result = runner.invoke(cli, ["up"])
+
+    assert result.exit_code == 0
+    _, kwargs = mock_run.call_args
+    assert kwargs.get("podman_socket") == "/run/user/1000/podman/podman.sock"
+    assert kwargs.get("podman_client") == "/cache/podman"
+
+
+@patch("cauldron.podman.container_exists", return_value=False)
+@patch("cauldron.podman.image_exists", return_value=True)
+@patch("cauldron.podman.build_project_image", return_value=True)
+@patch("cauldron.podman.run_container", return_value=True)
+@patch("cauldron.podman.container_running", return_value=True)
+@patch("cauldron.project.find_dockerfile", return_value=None)
+def test_up_reports_missing_podman_socket(
+    mock_dockerfile,
+    mock_running,
+    mock_run,
+    mock_build,
+    mock_image,
+    mock_container,
+    tmp_path,
+):
+    config_file = tmp_path / ".cauldron" / "cauldron.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("""
+[container]
+podman_socket = true
+""")
+
+    with patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path):
+        with patch(
+            "cauldron.podman_remote.ensure_socket",
+            side_effect=podman_remote.RemoteError("no socket"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(cli, ["up"])
+
+    assert result.exit_code != 0
+    assert "no socket" in result.output
+    mock_run.assert_not_called()
 
 
 @patch("cauldron.podman.container_exists", return_value=False)

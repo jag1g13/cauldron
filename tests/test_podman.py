@@ -461,6 +461,66 @@ def test_run_container_adds_known_hosts():
         assert "registry.internal:10.0.0.5" in args
 
 
+def test_podman_bin_defaults_to_podman(monkeypatch):
+    monkeypatch.delenv("CAULDRON_PODMAN_PATH", raising=False)
+    assert podman._podman_bin() == "podman"
+
+
+def test_podman_bin_honours_configured_path(monkeypatch):
+    monkeypatch.setenv("CAULDRON_PODMAN_PATH", "/usr/local/bin/cauldron-podman")
+    assert podman._podman_bin() == "/usr/local/bin/cauldron-podman"
+
+
+def test_run_container_uses_configured_podman_bin(monkeypatch):
+    monkeypatch.setenv("CAULDRON_PODMAN_PATH", "/usr/local/bin/cauldron-podman")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman._run(["version"])
+        assert mock_run.call_args[0][0] == [
+            "/usr/local/bin/cauldron-podman",
+            "version",
+        ]
+
+
+def test_run_container_mounts_podman_socket_and_client():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+            podman_socket="/run/user/1000/podman/podman.sock",
+            podman_client="/home/deck/.cache/cauldron/podman-remote/5.4.2/podman",
+        )
+        args = mock_run.call_args[0][0]
+        assert "/run/user/1000/podman:/run/podman-host" in args
+        assert (
+            "/home/deck/.cache/cauldron/podman-remote/5.4.2/podman:"
+            "/usr/local/bin/cauldron-podman:ro" in args
+        )
+        assert "CONTAINER_HOST=unix:///run/podman-host/podman.sock" in args
+        assert "CAULDRON_PODMAN_PATH=/usr/local/bin/cauldron-podman" in args
+
+
+def test_run_container_omits_podman_socket_by_default():
+    with patch("cauldron.podman._run") as mock_run:
+        mock_run.return_value.returncode = 0
+        podman.run_container(
+            name="cauldron-foo",
+            image="cauldron-foo:latest",
+            workdir="/home/deck/projects/foo",
+            project_dir="/home/deck/projects/foo",
+            uid="1000",
+            gid="1000",
+        )
+        args = mock_run.call_args[0][0]
+        assert "/run/podman-host" not in args
+        assert not any("CONTAINER_HOST=" in arg for arg in args)
+
+
 def test_run_container_warns_when_selinux_enabled_and_no_label():
     with patch("cauldron.podman._run") as mock_run:
         mock_run.return_value.returncode = 0

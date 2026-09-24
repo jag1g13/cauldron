@@ -48,6 +48,38 @@ base_image = "astral/uv:python3.14-trixie"
 
 The image is passed to the build as the `CAULDRON_BASE` build argument, so custom Dockerfiles can use `FROM ${CAULDRON_BASE}`.
 
+### Host Podman socket
+
+To use the host's Podman directly from inside the container — sharing both
+images and build cache, without a nested engine — enable `podman_socket`:
+
+```toml
+[container]
+podman_socket = true
+```
+
+On `cauldron up`, Cauldron reads the host's Podman version, downloads a
+matching static `podman-remote` client (checksum-verified and cached under
+`~/.cache/cauldron/podman-remote/<version>`), mounts it and the host's rootless
+socket into the container, and sets `CONTAINER_HOST`. Podman commands in the
+container then run against the host's Podman, so `podman build` reuses the
+host's images and build cache.
+
+The host must expose its socket:
+
+```bash
+systemctl --user enable --now podman.socket
+```
+
+Containers created from inside the container are siblings on the host, not
+children of the project container. Because they run on the host, the project
+directory must exist on the host at the same absolute path (the usual Cauldron
+model, where the host project directory is bind-mounted at the same path).
+Projects that live only inside the container cannot be bind-mounted by the host
+Podman. **Security:** access to the Podman socket is equivalent to full control
+of your rootless Podman on the host (it can bind-mount host paths and start
+privileged containers), so only enable it where that is acceptable.
+
 ### Environment variables
 
 Use the `[env]` table to set environment variables inside the container. This is useful for extending the `PATH` for tools installed by a custom Dockerfile, such as OpenCode installed with its default curl installer.
