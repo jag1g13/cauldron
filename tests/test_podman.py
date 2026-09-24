@@ -6,13 +6,6 @@ import pytest
 from cauldron import podman
 
 
-@pytest.fixture(autouse=True)
-def reset_verbose():
-    podman.set_verbose(False)
-    yield
-    podman.set_verbose(False)
-
-
 def test_set_verbose_changes_flag():
     podman.set_verbose(True)
     assert podman._verbose is True
