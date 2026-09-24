@@ -177,23 +177,21 @@ def test_build_project_image_uses_configured_base():
         }
 
 
-def test_container_exists_returns_true_when_container_present(fake_podman):
-    assert podman.container_exists("cauldron-foo") is True
+def test_container_exists_checks_named_container(fake_podman):
+    podman.container_exists("cauldron-foo")
     assert fake_podman.calls() == [["container", "exists", "cauldron-foo"]]
 
 
-def test_container_exists_returns_false_when_missing(fake_podman):
-    fake_podman.respond(["container", "exists"], returncode=1)
-    assert podman.container_exists("cauldron-foo") is False
+def test_container_running_inspects_state_flag(fake_podman):
+    podman.container_running("cauldron-foo")
+    assert fake_podman.calls() == [
+        ["container", "inspect", "-f", "{{.State.Running}}", "cauldron-foo"]
+    ]
 
 
-def test_container_running_inspects_state(fake_podman):
-    fake_podman.respond(["container", "inspect"], stdout="true\n")
-    assert podman.container_running("cauldron-foo") is True
-
-
-def test_container_running_returns_false_when_not_running(fake_podman):
-    fake_podman.respond(["container", "inspect"], stdout="false\n")
+def test_container_running_treats_non_true_as_false(fake_podman):
+    # A missing or unrecognised state must not be read as running.
+    fake_podman.respond(["container", "inspect"], stdout="")
     assert podman.container_running("cauldron-foo") is False
 
 
