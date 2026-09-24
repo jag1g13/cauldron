@@ -29,6 +29,9 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# Keep test directories inside the project so they are visible to the host
+# Podman when tests run inside a cauldron using the static remote client.
+addopts = "--basetemp=tmp/pytest -m 'not slow'"
 markers = [
     "integration: requires a reachable Podman service",
     "slow: long-running tests, such as downloading a static Podman client",

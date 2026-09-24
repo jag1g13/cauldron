@@ -18,6 +18,8 @@ import tarfile
 import urllib.error
 import urllib.request
 
+from cauldron import podman
+
 RELEASE_URL = "https://github.com/containers/podman/releases/download"
 
 
@@ -40,7 +42,12 @@ def server_version():
     """Return the host Podman server version, or None if it cannot be read."""
     for key in ("Server", "Client"):
         result = subprocess.run(
-            ["podman", "version", "--format", f"{{{{.{key}.Version}}}}"],
+            [
+                podman._podman_bin(),
+                "version",
+                "--format",
+                f"{{{{.{key}.Version}}}}",
+            ],
             capture_output=True,
             text=True,
         )

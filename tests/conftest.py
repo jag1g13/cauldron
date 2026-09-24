@@ -13,7 +13,7 @@ import uuid
 
 import pytest
 
-from cauldron import podman
+from cauldron import config, podman, project
 
 FAKE_PODMAN = pathlib.Path(__file__).parent / "fake_podman.py"
 BUSYBOX_IMAGE = "docker.io/library/busybox:1.37.0"
@@ -36,19 +36,24 @@ class FakePodman:
             if line
         ]
 
-    def respond(self, argv, stdout="", stderr="", returncode=0):
-        """Register a response rule for the given argv prefix."""
+    def respond(self, argv, stdout="", stderr="", returncode=0, times=None):
+        """Register a response rule for the given argv prefix.
+
+        ``times`` limits the rule to that many invocations, after which later
+        matching rules are used instead.
+        """
         rules = []
         if self.responses.exists():
             rules = json.loads(self.responses.read_text())
-        rules.append(
-            {
-                "argv": list(argv),
-                "stdout": stdout,
-                "stderr": stderr,
-                "returncode": returncode,
-            }
-        )
+        rule = {
+            "argv": list(argv),
+            "stdout": stdout,
+            "stderr": stderr,
+            "returncode": returncode,
+        }
+        if times is not None:
+            rule["times"] = times
+        rules.append(rule)
         self.responses.write_text(json.dumps(rules))
 
 
@@ -65,6 +70,15 @@ def reset_verbose():
     podman.set_verbose(False)
     yield
     podman.set_verbose(False)
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_config(tmp_path, monkeypatch):
+    """Stop the ambient user config and Dockerfile from affecting tests."""
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "global.toml")
+    monkeypatch.setattr(
+        project, "DOCKERFILE_GLOBAL_PATH", tmp_path / "global.Dockerfile"
+    )
 
 
 @pytest.fixture(scope="session")
@@ -136,10 +150,12 @@ def fake_podman(tmp_path, monkeypatch):
     """
     log = tmp_path / "podman.log"
     responses = tmp_path / "responses.json"
+    state = tmp_path / "podman.state"
     binary = tmp_path / "podman"
     binary.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_PODMAN}" "$@"\n')
     binary.chmod(0o755)
     monkeypatch.setenv("CAULDRON_PODMAN_PATH", str(binary))
     monkeypatch.setenv("FAKE_PODMAN_LOG", str(log))
     monkeypatch.setenv("FAKE_PODMAN_RESPONSES", str(responses))
+    monkeypatch.setenv("FAKE_PODMAN_STATE", str(state))
     return FakePodman(log, responses)

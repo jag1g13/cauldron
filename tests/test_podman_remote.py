@@ -17,18 +17,20 @@ def test_asset_names_neutral_for_old_versions():
     assert names[0] == "podman-remote-static.tar.gz"
 
 
-def test_server_version_strips_leading_v():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 0
-        mock_run.return_value.stdout = "v3.4.4\n"
-        assert podman_remote.server_version() == "3.4.4"
+def test_server_version_strips_leading_v(fake_podman):
+    fake_podman.respond(["version"], stdout="v3.4.4\n")
+    assert podman_remote.server_version() == "3.4.4"
 
 
-def test_server_version_returns_none_when_unavailable():
-    with patch("subprocess.run") as mock_run:
-        mock_run.return_value.returncode = 1
-        mock_run.return_value.stdout = ""
-        assert podman_remote.server_version() is None
+def test_server_version_returns_none_when_unavailable(fake_podman):
+    fake_podman.respond(["version"], returncode=1)
+    assert podman_remote.server_version() is None
+
+
+@pytest.mark.integration
+def test_server_version_against_live_service(podman_service):
+    version = podman_remote.server_version()
+    assert version
 
 
 def test_ensure_socket_raises_when_missing(tmp_path):
@@ -46,15 +48,15 @@ def test_ensure_socket_returns_path_when_present(tmp_path):
         assert podman_remote.ensure_socket() == socket
 
 
-def test_ensure_client_uses_cached_binary(tmp_path, monkeypatch):
+def test_ensure_client_uses_cached_binary(tmp_path, monkeypatch, fake_podman):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     directory = podman_remote._cache_dir("5.4.2")
     directory.mkdir(parents=True)
     binary = directory / "podman"
     binary.write_text("cached")
 
-    with patch("cauldron.podman_remote.server_version", return_value="5.4.2"):
-        assert podman_remote.ensure_client() == binary
+    fake_podman.respond(["version"], stdout="5.4.2\n")
+    assert podman_remote.ensure_client() == binary
 
 
 def test_ensure_client_downloads_and_extracts(tmp_path, monkeypatch):
@@ -85,5 +87,13 @@ def test_ensure_client_downloads_and_extracts(tmp_path, monkeypatch):
                 binary = podman_remote.ensure_client(version=version, arch="amd64")
 
     assert binary == podman_remote._cache_dir(version) / "podman"
+    assert binary.exists()
+    assert binary.stat().st_mode & 0o111
+
+
+@pytest.mark.slow
+def test_ensure_client_downloads_real_binary(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    binary = podman_remote.ensure_client(version="5.4.2", arch="amd64")
     assert binary.exists()
     assert binary.stat().st_mode & 0o111

@@ -112,7 +112,7 @@ def _build_host_block(container):
         "    IdentitiesOnly yes\n"
         "    StrictHostKeyChecking no\n"
         "    UserKnownHostsFile /dev/null\n"
-        f"    ProxyCommand podman exec -u 0 -i {container}"
+        f"    ProxyCommand {podman._podman_bin()} exec -u 0 -i {container}"
         " /usr/sbin/sshd -i"
         " -o UsePAM=no -o PasswordAuthentication=no\n"
     )
