@@ -172,6 +172,21 @@ mounts = [
 SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
 ```
 
+## Testing
+
+```bash
+# Lint, format check, and run the test suite
+uv run ruff check
+uv run ruff format --check
+uv run pytest
+```
+
+Tests run against a real Podman when one is reachable — a local engine, or the
+mounted static `podman-remote` when run inside a cauldron — and skip otherwise.
+Argument-level assertions use a recording fake executable rather than mocking
+Podman in-process. Long-running tests are deselected by default; run them with
+`uv run pytest -m slow`.
+
 ## Documentation
 
 - [Architecture and design](docs/spec/overview.md)

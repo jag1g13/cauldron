@@ -113,8 +113,16 @@ acceptable.
 - Unit tests cover asset-name selection, version parsing, socket detection,
   checksum/caching behaviour, and the run arguments (socket and client mounts,
   `CONTAINER_HOST`, `CAULDRON_PODMAN_PATH`).
-- The static client fetch and extraction were exercised directly against the
-  v3.4.4 release.
+- Argument-level behaviour is asserted through a recording fake executable
+  selected via `CAULDRON_PODMAN_PATH`, so no test mocks Podman in-process.
+- Integration tests run against whichever Podman the environment provides:
+  a local engine on the host, or the mounted static `podman-remote` inside a
+  cauldron. This covers image pull/build, container lifecycle, `exec`, and the
+  CLI `up`/`exec`/`ps`/`stop`/`rm` flows. They skip cleanly when no service is
+  reachable, and test directories are kept inside the project so host Podman can
+  bind-mount them when running inside a cauldron.
+- Downloading a real static client is covered by a test that is deselected by
+  default and run with `pytest -m slow`.
 - The full flow was validated manually: `cauldron up --build` inside the
   container reused the host's build cache, started a host sibling container, and
   `cauldron exec` succeeded.
