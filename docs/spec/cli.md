@@ -129,6 +129,7 @@ Lists Cauldron-managed containers. Only containers whose names match Cauldron's 
 | `NAME` | Container name. |
 | `IMAGE` | Image used by the container. |
 | `STATUS` | Running, exited, etc. |
+| `PORTS` | Published ports in `HOST->CONTAINER/PROTO` form (e.g. `0.0.0.0:8080->22/tcp`); `-` if none. |
 | `PROJECT` | Host project directory. |
 
 ## `exec`

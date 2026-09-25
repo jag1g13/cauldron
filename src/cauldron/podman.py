@@ -513,7 +513,8 @@ def remove_container(name, force=False):
 def list_containers(all_containers=False):
     """List Cauldron-managed containers.
 
-    Returns a list of dictionaries with keys: name, image, status, project_dir.
+    Returns a list of dictionaries with keys: name, image, status, ports,
+    project_dir. ``ports`` is a list of strings like ``"0.0.0.0:8080->22/tcp"``.
     """
     args = [
         "ps",
@@ -544,7 +545,24 @@ def list_containers(all_containers=False):
             else c.get("Names", ""),
             "image": c.get("Image", ""),
             "status": c.get("State", c.get("Status", "")),
+            "ports": _format_ports(c.get("Ports") or []),
             "project_dir": c.get("Labels", {}).get(PROJECT_LABEL, ""),
         }
         for c in containers
     ]
+
+
+def _format_ports(ports):
+    """Render podman ps port mappings as strings like '0.0.0.0:8080->22/tcp'."""
+    formatted = []
+    for p in ports:
+        if not isinstance(p, dict):
+            continue
+        container_port = p.get("container_port", p.get("containerPort"))
+        host_port = p.get("host_port", p.get("hostPort"))
+        if container_port is None or host_port is None:
+            continue
+        host_ip = p.get("host_ip", p.get("hostIp")) or "0.0.0.0"
+        protocol = p.get("protocol", "tcp")
+        formatted.append(f"{host_ip}:{host_port}->{container_port}/{protocol}")
+    return formatted

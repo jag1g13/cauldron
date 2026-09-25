@@ -441,6 +441,8 @@ def test_ps_lists_containers(fake_podman):
         stdout=(
             '[{"Names": ["cauldron-foo"], "Image": "cauldron-foo:latest", '
             '"State": "running", '
+            '"Ports": [{"host_ip": "0.0.0.0", "host_port": 2222, '
+            '"container_port": 22, "protocol": "tcp"}], '
             '"Labels": {"cauldron.project_dir": "/home/deck/projects/foo"}}]'
         ),
     )
@@ -449,7 +451,25 @@ def test_ps_lists_containers(fake_podman):
 
     assert result.exit_code == 0
     assert "cauldron-foo" in result.output
+    assert "0.0.0.0:2222->22/tcp" in result.output
     assert "/home/deck/projects/foo" in result.output
+
+
+def test_ps_shows_placeholder_for_containers_without_ports(fake_podman):
+    fake_podman.respond(
+        ["ps"],
+        stdout=(
+            '[{"Names": ["cauldron-foo"], "Image": "cauldron-foo:latest", '
+            '"State": "running", '
+            '"Labels": {"cauldron.project_dir": "/home/deck/projects/foo"}}]'
+        ),
+    )
+
+    result = invoke(["ps"])
+
+    assert result.exit_code == 0
+    assert "PORTS" in result.output.splitlines()[0]
+    assert "-" in result.output
 
 
 def test_tty_flags_detects_interactive_terminal():

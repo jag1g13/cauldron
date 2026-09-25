@@ -415,14 +415,20 @@ def ps(all_containers):
     name_width = max(len(c["name"]) for c in containers)
     image_width = max(len(c["image"]) for c in containers)
     status_width = max(len(c["status"]) for c in containers)
+    ports = [", ".join(c["ports"]) or "-" for c in containers]
+    ports_width = max(len(p) for p in ports)
 
-    header = f"{'NAME':<{name_width}}  {'IMAGE':<{image_width}}  {'STATUS':<{status_width}}  PROJECT"
+    header = (
+        f"{'NAME':<{name_width}}  {'IMAGE':<{image_width}}  "
+        f"{'STATUS':<{status_width}}  {'PORTS':<{ports_width}}  PROJECT"
+    )
     click.echo(header)
-    for c in containers:
+    for c, ports_str in zip(containers, ports):
         click.echo(
             f"{c['name']:<{name_width}}  "
             f"{c['image']:<{image_width}}  "
             f"{c['status']:<{status_width}}  "
+            f"{ports_str:<{ports_width}}  "
             f"{c['project_dir']}"
         )
 

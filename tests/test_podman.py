@@ -550,6 +550,9 @@ def test_list_containers_parses_podman_ps_json(fake_podman):
             "Names": ["cauldron-foo"],
             "Image": "cauldron-foo:latest",
             "State": "running",
+            "Ports": [
+                {"host_ip": "0.0.0.0", "host_port": 2222, "container_port": 22, "protocol": "tcp"}
+            ],
             "Labels": {"cauldron.project_dir": "/home/deck/projects/foo"}
         }
     ]"""
@@ -559,7 +562,22 @@ def test_list_containers_parses_podman_ps_json(fake_podman):
     assert containers[0]["name"] == "cauldron-foo"
     assert containers[0]["image"] == "cauldron-foo:latest"
     assert containers[0]["status"] == "running"
+    assert containers[0]["ports"] == ["0.0.0.0:2222->22/tcp"]
     assert containers[0]["project_dir"] == "/home/deck/projects/foo"
+
+
+def test_list_containers_formats_ports_with_camel_case_keys(fake_podman):
+    json_output = """[
+        {
+            "Names": ["cauldron-foo"],
+            "Image": "cauldron-foo:latest",
+            "State": "running",
+            "Ports": [{"hostPort": 8080, "containerPort": 8080}]
+        }
+    ]"""
+    fake_podman.respond(["ps"], stdout=json_output)
+    containers = podman.list_containers()
+    assert containers[0]["ports"] == ["0.0.0.0:8080->8080/tcp"]
 
 
 def test_list_containers_returns_empty_on_failure(fake_podman):
