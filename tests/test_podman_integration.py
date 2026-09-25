@@ -75,6 +75,8 @@ def test_container_lifecycle(base_image, scratch, tmp_path):
 
     assert podman.remove_container(name, force=True) is True
     assert podman.container_exists(name) is False
+    # Inspecting a removed container fails, which must read as not running.
+    assert podman.container_running(name) is False
 
 
 def test_list_containers_includes_labelled_container(base_image, scratch, tmp_path):

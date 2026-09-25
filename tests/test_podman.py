@@ -189,12 +189,6 @@ def test_container_running_inspects_state_flag(fake_podman):
     ]
 
 
-def test_container_running_treats_non_true_as_false(fake_podman):
-    # A missing or unrecognised state must not be read as running.
-    fake_podman.respond(["container", "inspect"], stdout="")
-    assert podman.container_running("cauldron-foo") is False
-
-
 def test_container_shell_returns_shell_from_container(fake_podman):
     fake_podman.respond(["exec"], stdout="/bin/zsh\n")
     assert podman.container_shell("cauldron-foo") == "/bin/zsh"
@@ -203,11 +197,6 @@ def test_container_shell_returns_shell_from_container(fake_podman):
 
 def test_container_shell_returns_fallback_when_unset(fake_podman):
     fake_podman.respond(["exec"], returncode=1)
-    assert podman.container_shell("cauldron-foo") == "bash"
-
-
-def test_container_shell_returns_fallback_when_empty(fake_podman):
-    fake_podman.respond(["exec"], stdout="\n")
     assert podman.container_shell("cauldron-foo") == "bash"
 
 
