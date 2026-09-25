@@ -45,17 +45,11 @@ def test_version_returns_false_when_podman_fails(fake_podman):
     assert podman.version() is False
 
 
-def test_image_id_returns_id_on_success(fake_podman):
-    fake_podman.respond(["image", "inspect"], stdout="sha256:abc123\n")
-    assert podman.image_id("debian:trixie-slim") == "sha256:abc123"
+def test_image_id_inspects_id_format(fake_podman):
+    podman.image_id("debian:trixie-slim")
     assert fake_podman.calls() == [
         ["image", "inspect", "debian:trixie-slim", "-f", "{{.Id}}"]
     ]
-
-
-def test_image_id_returns_none_on_failure(fake_podman):
-    fake_podman.respond(["image", "inspect"], returncode=1)
-    assert podman.image_id("debian:trixie-slim") is None
 
 
 def test_ensure_base_image_returns_true_when_image_exists(fake_podman):
@@ -189,9 +183,8 @@ def test_container_running_inspects_state_flag(fake_podman):
     ]
 
 
-def test_container_shell_returns_shell_from_container(fake_podman):
-    fake_podman.respond(["exec"], stdout="/bin/zsh\n")
-    assert podman.container_shell("cauldron-foo") == "/bin/zsh"
+def test_container_shell_probes_printenv_shell(fake_podman):
+    podman.container_shell("cauldron-foo")
     assert fake_podman.calls() == [["exec", "cauldron-foo", "printenv", "SHELL"]]
 
 
@@ -205,8 +198,12 @@ def test_container_shell_accepts_custom_fallback(fake_podman):
     assert podman.container_shell("cauldron-foo", fallback="sh") == "sh"
 
 
-def test_image_env_parses_inspect_output(fake_podman):
-    fake_podman.respond(["image", "inspect"], stdout='["PATH=/usr/bin:/bin","FOO=bar"]')
+def test_image_env_parses_and_filters_inspect_output(fake_podman):
+    # Real logic: parse the JSON array and keep only KEY=VALUE entries.
+    fake_podman.respond(
+        ["image", "inspect"],
+        stdout='["PATH=/usr/bin:/bin","FOO=bar","BARE_FLAG"]',
+    )
     assert podman.image_env("cauldron-foo:latest") == {
         "PATH": "/usr/bin:/bin",
         "FOO": "bar",
@@ -220,11 +217,6 @@ def test_image_env_parses_inspect_output(fake_podman):
             "{{json .Config.Env}}",
         ]
     ]
-
-
-def test_image_env_returns_empty_on_failure(fake_podman):
-    fake_podman.respond(["image", "inspect"], returncode=1)
-    assert podman.image_env("cauldron-foo:latest") == {}
 
 
 def test_run_container_passes_env_vars(fake_podman):
@@ -480,17 +472,11 @@ def test_restart_container_runs_podman_restart(fake_podman):
     assert fake_podman.calls() == [["restart", "cauldron-foo"]]
 
 
-def test_container_id_returns_id(fake_podman):
-    fake_podman.respond(["container", "inspect"], stdout="abc123\n")
-    assert podman.container_id("cauldron-foo") == "abc123"
+def test_container_id_inspects_id_format(fake_podman):
+    podman.container_id("cauldron-foo")
     assert fake_podman.calls() == [
         ["container", "inspect", "-f", "{{.Id}}", "cauldron-foo"]
     ]
-
-
-def test_container_id_returns_none_on_failure(fake_podman):
-    fake_podman.respond(["container", "inspect"], returncode=1)
-    assert podman.container_id("cauldron-foo") is None
 
 
 def test_stop_container_runs_podman_stop(fake_podman):

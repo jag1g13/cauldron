@@ -26,6 +26,14 @@ def test_image_lifecycle(fast_image, scratch):
     assert podman.image_exists(target) is True
 
 
+def test_image_env_reads_config_and_handles_missing(base_image):
+    # A real image's JSON env config is parsed into a dict...
+    assert podman.image_env(base_image).get("PATH")
+    # ...and inspecting a missing image fails, which must read as empty.
+    assert podman.image_id("cauldron-no-such-image:latest") is None
+    assert podman.image_env("cauldron-no-such-image:latest") == {}
+
+
 def test_pull_returns_false_for_missing_image(podman_service, scratch):
     missing = "docker.io/library/cauldron-does-not-exist:latest"
     assert podman.pull(missing) is False
@@ -75,8 +83,9 @@ def test_container_lifecycle(base_image, scratch, tmp_path):
 
     assert podman.remove_container(name, force=True) is True
     assert podman.container_exists(name) is False
-    # Inspecting a removed container fails, which must read as not running.
+    # Inspecting a removed container fails, which must read as absent.
     assert podman.container_running(name) is False
+    assert podman.container_id(name) is None
 
 
 def test_list_containers_includes_labelled_container(base_image, scratch, tmp_path):
