@@ -4,7 +4,7 @@ import sys
 
 import click
 
-from cauldron import config, devcontainers, podman, project, ssh, vscode
+from cauldron import config, devcontainers, podman, podman_remote, project, ssh, vscode
 
 
 def _read_data_file(name):
@@ -30,6 +30,13 @@ def check():
     """Check that dependencies are installed and Podman can pull, build, and run."""
     cfg = config.load_config()
     base_image = config.base_image(cfg)
+    podman_socket = config.container_podman_socket(cfg)
+
+    if podman_remote.running_in_remote():
+        click.echo("Running inside an existing cauldron (host Podman in use).")
+    else:
+        click.echo("Not running inside a cauldron.")
+
     steps = [
         ("podman is installed", podman.version),
         ("base image is available", lambda: podman.ensure_base_image(base_image)),
@@ -43,6 +50,18 @@ def check():
         else:
             click.echo("failed")
             raise click.ClickException(f"Check failed: {description}")
+
+    if podman_socket:
+        click.echo("Checking host Podman socket... ", nl=False)
+        try:
+            # When already running against the host socket there is nothing to
+            # verify; otherwise the host socket must exist at the default path.
+            if not podman_remote.running_in_remote():
+                podman_remote.ensure_socket()
+            click.echo("ok")
+        except podman_remote.RemoteError as exc:
+            click.echo("unavailable")
+            click.echo(f"warning: {exc}")
 
     click.echo("All checks passed.")
 
@@ -195,6 +214,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     cfg = config.load_config(project_dir)
     base_image = config.base_image(cfg)
     scripts = config.container_scripts(cfg)
+    podman_socket = config.container_podman_socket(cfg)
     has_entrypoint = "entrypoint" in scripts
 
     if podman.container_exists(container):
@@ -310,7 +330,27 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 )
 
     click.echo(f"Starting container {container}...")
-    container_env = config.container_env(cfg)
+    nested = podman_remote.running_in_remote()
+    socket_path = None
+    client_path = None
+    if podman_socket:
+        try:
+            if nested:
+                socket_path, client_path = podman_remote.host_backend_paths()
+            else:
+                socket_path = podman_remote.ensure_socket()
+                client_path = podman_remote.ensure_client()
+        except podman_remote.RemoteError as exc:
+            raise click.ClickException(str(exc)) from exc
+    if nested:
+        # Nested: reuse this cauldron's host mounts and env instead of re-deriving
+        # them from the config, whose env-var expansion would yield cauldron-local
+        # paths the host cannot bind-mount.
+        mounts = podman_remote.host_sibling_mounts(project_dir)
+        env = podman_remote.host_sibling_env()
+    else:
+        mounts = config.container_mounts(cfg)
+        env = config.container_env(cfg)
     if not podman.run_container(
         name=container,
         image=image,
@@ -318,10 +358,12 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         project_dir=project_dir,
         uid=uid,
         gid=gid,
-        env=container_env,
-        mounts=config.container_mounts(cfg),
+        env=env,
+        mounts=mounts,
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
+        podman_socket=socket_path,
+        podman_client=client_path,
         entrypoint=has_entrypoint,
     ):
         raise click.ClickException(f"Failed to start container {container}.")
@@ -404,14 +446,20 @@ def ps(all_containers):
     name_width = max(len(c["name"]) for c in containers)
     image_width = max(len(c["image"]) for c in containers)
     status_width = max(len(c["status"]) for c in containers)
+    ports = [", ".join(c["ports"]) or "-" for c in containers]
+    ports_width = max(len(p) for p in ports)
 
-    header = f"{'NAME':<{name_width}}  {'IMAGE':<{image_width}}  {'STATUS':<{status_width}}  PROJECT"
+    header = (
+        f"{'NAME':<{name_width}}  {'IMAGE':<{image_width}}  "
+        f"{'STATUS':<{status_width}}  {'PORTS':<{ports_width}}  PROJECT"
+    )
     click.echo(header)
-    for c in containers:
+    for c, ports_str in zip(containers, ports):
         click.echo(
             f"{c['name']:<{name_width}}  "
             f"{c['image']:<{image_width}}  "
             f"{c['status']:<{status_width}}  "
+            f"{ports_str:<{ports_width}}  "
             f"{c['project_dir']}"
         )
 

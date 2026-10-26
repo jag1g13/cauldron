@@ -1,6 +1,6 @@
 from unittest.mock import patch, MagicMock
 
-from cauldron import ssh
+from cauldron import podman, ssh
 
 
 def test_ensure_keypair_skips_when_keys_exist(tmp_path):
@@ -119,7 +119,7 @@ def test_build_remote_uri_format():
     assert "Host cauldron-foo" in uri
     assert "User cauldron" in uri
     assert "IdentityFile ~/.config/cauldron/ssh/id_ed25519" in uri
-    assert "ProxyCommand podman exec -u 0 -i cauldron-foo" in uri
+    assert f"ProxyCommand {podman._podman_bin()} exec -u 0 -i cauldron-foo" in uri
     assert "/usr/sbin/sshd -i" in uri
     assert "UsePAM=no" in uri
     assert "PasswordAuthentication=no" in uri

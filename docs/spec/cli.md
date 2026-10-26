@@ -30,7 +30,11 @@ Options that apply to individual commands (for example `--name`) are listed unde
 cauldron check
 ```
 
-Verifies that the environment is ready to use Cauldron:
+First, it reports whether it is running inside an existing cauldron (i.e. already
+talking to the host's Podman through the mounted socket). This is informational
+only and never affects the result.
+
+Then it verifies that the environment is ready to use Cauldron:
 
 1. Podman is installed and runnable (`podman version`).
 2. The base image `debian:trixie-slim` can be pulled.
@@ -38,6 +42,12 @@ Verifies that the environment is ready to use Cauldron:
 4. A throwaway container from the base image can run a simple command (`echo cauldron-check-ok`).
 
 If any step fails, the command exits with a non-zero status and prints the failure reason.
+
+When `podman_socket` is enabled, `check` additionally verifies the host's Podman
+socket. This step only warns (and does not fail the check) if the socket is not
+available, since `podman_socket` is optional; it is skipped entirely when
+`podman_socket` is disabled, and reported as already in use when running inside
+a cauldron that is itself using the host socket.
 
 ## `init`
 
@@ -129,6 +139,7 @@ Lists Cauldron-managed containers. Only containers whose names match Cauldron's 
 | `NAME` | Container name. |
 | `IMAGE` | Image used by the container. |
 | `STATUS` | Running, exited, etc. |
+| `PORTS` | Published ports in `HOST->CONTAINER/PROTO` form (e.g. `0.0.0.0:8080->22/tcp`); `-` if none. |
 | `PROJECT` | Host project directory. |
 
 ## `exec`

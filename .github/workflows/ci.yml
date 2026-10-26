@@ -17,6 +17,12 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          podman --version
+
       - name: Sync dependencies
         run: uv sync
 
