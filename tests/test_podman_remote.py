@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from cauldron import podman_remote
+from cauldron import podman, podman_remote, project
 
 
 def test_asset_names_arch_suffixed_for_modern_versions():
@@ -222,3 +222,31 @@ def test_host_sibling_env_drops_managed_keys(monkeypatch):
         "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
         "SHELL": "/bin/bash",
     }
+
+
+@pytest.mark.integration
+def test_host_backend_paths_match_live_container_mounts(podman_service):
+    if not podman_remote.running_in_remote():
+        pytest.skip("not running inside a cauldron using the host socket")
+
+    socket, client = podman_remote.host_backend_paths()
+    mounts = {
+        mount["Destination"]: mount["Source"]
+        for mount in podman.container_mounts(podman_remote._container_id())
+    }
+    assert socket.parent == pathlib.Path(mounts["/run/podman-host"])
+    assert client == pathlib.Path(mounts["/usr/local/bin/cauldron-podman"])
+
+
+@pytest.mark.integration
+def test_host_sibling_mounts_reuse_host_paths_and_skip_managed(podman_service):
+    if not podman_remote.running_in_remote():
+        pytest.skip("not running inside a cauldron using the host socket")
+
+    mounts = podman_remote.host_sibling_mounts(project.project_dir())
+    destinations = {mount["target"] for mount in mounts}
+    assert "/run/podman-host" not in destinations
+    assert "/usr/local/bin/cauldron-podman" not in destinations
+    for mount in mounts:
+        # Sources must be host paths, not cauldron-local ones.
+        assert not mount["source"].startswith("/home/cauldron/")

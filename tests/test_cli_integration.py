@@ -5,10 +5,14 @@ base image with the project's image name so ``up --no-build`` can start a
 container without a full build.
 """
 
+import pathlib
+import shutil
+import uuid
+
 import pytest
 from click.testing import CliRunner
 
-from cauldron import podman
+from cauldron import podman, podman_remote
 from cauldron.cli import cli
 
 pytestmark = pytest.mark.integration
@@ -56,3 +60,41 @@ def test_exec_propagates_exit_code(project):
     assert invoke(["up", "--no-build"]).exit_code == 0
     result = invoke(["exec", "false"])
     assert result.exit_code == 1
+
+
+def test_up_nested_creates_host_sibling(podman_service, base_image, monkeypatch):
+    if not podman_remote.running_in_remote():
+        pytest.skip("not running inside a cauldron using the host socket")
+
+    # The sibling's project dir must be host-visible, so create it under the
+    # current (host-mounted) project directory and clean it up afterwards. The
+    # name is a clean slug (no leading dot) so the derived image tag is valid.
+    workdir = pathlib.Path.cwd() / f"cauldron-nested-e2e-{uuid.uuid4().hex[:8]}"
+    (workdir / ".cauldron").mkdir(parents=True)
+    (workdir / ".cauldron" / "cauldron.toml").write_text(
+        "[container]\npodman_socket = true\n"
+    )
+    container = f"cauldron-{workdir.name}"
+    image = f"cauldron-{workdir.name}:latest"
+    assert podman.tag(base_image, image) is True
+    monkeypatch.chdir(workdir)
+    try:
+        result = invoke(["up", "--no-build"])
+        assert result.exit_code == 0, result.output
+        assert podman.container_running(container) is True
+
+        destinations = {
+            mount["Destination"] for mount in podman.container_mounts(container)
+        }
+        assert "/run/podman-host" in destinations
+        assert "/usr/local/bin/cauldron-podman" in destinations
+
+        # The sibling reaches the host's Podman through the mounted client.
+        assert podman.exec_capture(
+            container,
+            ["/bin/sh", "-c", "HOME=/tmp /usr/local/bin/cauldron-podman version"],
+        )
+    finally:
+        podman.remove_container(container, force=True)
+        podman._run(["rmi", "-f", image])
+        shutil.rmtree(workdir, ignore_errors=True)
