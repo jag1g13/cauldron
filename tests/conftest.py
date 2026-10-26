@@ -64,6 +64,19 @@ def _podman_reachable():
         return False
 
 
+@pytest.fixture(autouse=True, scope="session")
+def ensure_basetemp(request):
+    """Create the configured --basetemp path before the first tmp_path use.
+
+    ``--basetemp=tmp/pytest`` sits under the gitignored ``tmp/`` directory,
+    which does not exist on a fresh checkout or CI runner, and pytest can
+    only create the final component itself.
+    """
+    basetemp = request.config.option.basetemp
+    if basetemp:
+        pathlib.Path(basetemp).mkdir(parents=True, exist_ok=True)
+
+
 @pytest.fixture(autouse=True)
 def reset_verbose():
     """Keep the module-level verbose flag from leaking between tests."""
