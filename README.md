@@ -62,10 +62,12 @@ On `cauldron up`, Cauldron reads the host's Podman version, downloads a
 matching static `podman-remote` client (checksum-verified and cached under
 `~/.cache/cauldron/podman-remote/<version>`), mounts it and the host's rootless
 socket into the container, and sets `CONTAINER_HOST`. Podman commands in the
-container then run against the host's Podman, so `podman build` reuses the
-host's images and build cache.
+ container then run against the host's Podman, so `podman build` reuses the
+ host's images and build cache. `cauldron up` also works from inside such a
+ container, reusing the host socket and client already mounted in for the new
+ sibling container.
 
-The host must expose its socket:
+ The host must expose its socket:
 
 ```bash
 systemctl --user enable --now podman.socket

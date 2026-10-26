@@ -479,6 +479,24 @@ def test_container_id_inspects_id_format(fake_podman):
     ]
 
 
+def test_container_mounts_parses_mount_list(fake_podman):
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{json .Mounts}}", "cauldron-foo"],
+        stdout='[{"Source": "/a", "Destination": "/b"}]\n',
+    )
+    assert podman.container_mounts("cauldron-foo") == [
+        {"Source": "/a", "Destination": "/b"}
+    ]
+
+
+def test_container_mounts_empty_on_failure(fake_podman):
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{json .Mounts}}", "cauldron-foo"],
+        returncode=1,
+    )
+    assert podman.container_mounts("cauldron-foo") == []
+
+
 def test_stop_container_runs_podman_stop(fake_podman):
     assert podman.stop_container("cauldron-foo") is True
     assert fake_podman.calls() == [["stop", "cauldron-foo"]]

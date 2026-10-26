@@ -12,7 +12,9 @@ import hashlib
 import os
 import pathlib
 import platform
+import re
 import shutil
+import socket
 import subprocess
 import tarfile
 import urllib.error
@@ -194,3 +196,76 @@ def ensure_socket():
             "'systemctl --user enable --now podman.socket'."
         )
     return path
+
+
+def running_in_remote():
+    """Return True when running inside a cauldron that already talks to the host.
+
+    This is the nested case: a cauldron created with ``podman_socket`` is itself
+    running ``cauldron`` commands. ``run_container`` points the container at the
+    mounted host socket through ``CONTAINER_HOST``, so that value marks a
+    container whose Podman commands already reach the host.
+    """
+    return "/run/podman-host" in os.environ.get("CONTAINER_HOST", "")
+
+
+def _container_id():
+    """Best-effort id of the current container, for inspecting its own mounts.
+
+    ``CAULDRON_CONTAINER_ID`` overrides this. Otherwise the container's hostname
+    is used, since Podman sets it to the (short) container id; the cgroup is a
+    final fallback when its namespace exposes the host hierarchy.
+    """
+    override = os.environ.get("CAULDRON_CONTAINER_ID", "").strip()
+    if override:
+        return override
+    hostname = (os.environ.get("HOSTNAME") or socket.gethostname() or "").strip()
+    if hostname:
+        return hostname
+    try:
+        text = pathlib.Path("/proc/self/cgroup").read_text()
+    except OSError:
+        return None
+    match = re.search(r"(?:libpod|podman|docker)[-_.]?([0-9a-f]{6,64})", text)
+    return match.group(1) if match else None
+
+
+def host_backend_paths():
+    """Return the host-side socket and client paths for a sibling container.
+
+    When nested, the host socket directory and static client are already
+    bind-mounted into this container from the host. Reusing those exact host
+    paths (read from the current container's mounts) lets a newly created
+    sibling share the same socket and client, without re-resolving or
+    re-downloading anything on the host.
+    """
+    cid = _container_id()
+    if not cid:
+        raise RemoteError(
+            "Could not determine the current container id. Set "
+            "CAULDRON_CONTAINER_ID to the container id when running cauldron "
+            "inside a cauldron."
+        )
+
+    socket_dir = None
+    client = None
+    for mount in podman.container_mounts(cid):
+        destination = mount.get("Destination")
+        if destination == "/run/podman-host":
+            socket_dir = mount.get("Source")
+        elif destination == "/usr/local/bin/cauldron-podman":
+            client = mount.get("Source")
+    if not socket_dir or not client:
+        raise RemoteError(
+            f"Could not find the host Podman socket and client mounts on "
+            f"container {cid}. Was this cauldron created with podman_socket "
+            "enabled?"
+        )
+
+    socket_name = "podman.sock"
+    container_host = os.environ.get("CONTAINER_HOST", "")
+    if container_host.startswith("unix://"):
+        tail = container_host[len("unix://") :].rsplit("/", 1)[-1]
+        if tail:
+            socket_name = tail
+    return pathlib.Path(socket_dir) / socket_name, pathlib.Path(client)

@@ -97,3 +97,64 @@ def test_ensure_client_downloads_real_binary(tmp_path, monkeypatch):
     binary = podman_remote.ensure_client(version="5.4.2", arch="amd64")
     assert binary.exists()
     assert binary.stat().st_mode & 0o111
+
+
+def test_running_in_remote_false_without_container_host(monkeypatch):
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
+    assert podman_remote.running_in_remote() is False
+
+
+def test_running_in_remote_true_with_container_host(monkeypatch):
+    monkeypatch.setenv("CONTAINER_HOST", "unix:///run/podman-host/podman.sock")
+    assert podman_remote.running_in_remote() is True
+
+
+def test_container_id_prefers_override(monkeypatch):
+    monkeypatch.setenv("CAULDRON_CONTAINER_ID", "override-id")
+    monkeypatch.setenv("HOSTNAME", "90fdf395e0ea")
+    assert podman_remote._container_id() == "override-id"
+
+
+def test_container_id_falls_back_to_hostname(monkeypatch):
+    monkeypatch.delenv("CAULDRON_CONTAINER_ID", raising=False)
+    monkeypatch.setenv("HOSTNAME", "90fdf395e0ea")
+    assert podman_remote._container_id() == "90fdf395e0ea"
+
+
+def test_container_id_uses_system_hostname(monkeypatch):
+    monkeypatch.delenv("CAULDRON_CONTAINER_ID", raising=False)
+    monkeypatch.delenv("HOSTNAME", raising=False)
+    monkeypatch.setattr(
+        "cauldron.podman_remote.socket.gethostname", lambda: "90fdf395e0ea"
+    )
+    assert podman_remote._container_id() == "90fdf395e0ea"
+
+
+def test_host_backend_paths_reuses_mounts(monkeypatch):
+    monkeypatch.setenv("CAULDRON_CONTAINER_ID", "abc")
+    monkeypatch.setenv("CONTAINER_HOST", "unix:///run/podman-host/podman.sock")
+    monkeypatch.setattr(
+        "cauldron.podman.container_mounts",
+        lambda name: [
+            {"Source": "/run/user/1000/podman", "Destination": "/run/podman-host"},
+            {
+                "Source": "/home/host/.cache/cauldron/podman-remote/5.4.2/podman",
+                "Destination": "/usr/local/bin/cauldron-podman",
+            },
+        ],
+    )
+
+    socket, client = podman_remote.host_backend_paths()
+
+    assert socket == pathlib.Path("/run/user/1000/podman/podman.sock")
+    assert client == pathlib.Path(
+        "/home/host/.cache/cauldron/podman-remote/5.4.2/podman"
+    )
+
+
+def test_host_backend_paths_raises_without_mounts(monkeypatch):
+    monkeypatch.setenv("CAULDRON_CONTAINER_ID", "abc")
+    monkeypatch.setattr("cauldron.podman.container_mounts", lambda name: [])
+
+    with pytest.raises(podman_remote.RemoteError, match="podman_socket"):
+        podman_remote.host_backend_paths()

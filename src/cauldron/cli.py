@@ -316,8 +316,11 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     client_path = None
     if podman_socket:
         try:
-            socket_path = podman_remote.ensure_socket()
-            client_path = podman_remote.ensure_client()
+            if podman_remote.running_in_remote():
+                socket_path, client_path = podman_remote.host_backend_paths()
+            else:
+                socket_path = podman_remote.ensure_socket()
+                client_path = podman_remote.ensure_client()
         except podman_remote.RemoteError as exc:
             raise click.ClickException(str(exc)) from exc
     if not podman.run_container(

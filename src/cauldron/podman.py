@@ -403,6 +403,24 @@ def container_id(name):
     return result.stdout.strip()
 
 
+def container_mounts(name):
+    """Return the mount list for a container, or an empty list if unreadable.
+
+    Each entry is a dict with ``Source`` (host path) and ``Destination``
+    (container path), as reported by ``podman container inspect``.
+    """
+    result = _run(["container", "inspect", "-f", "{{json .Mounts}}", name])
+    if result.returncode != 0:
+        return []
+    try:
+        mounts = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    if isinstance(mounts, dict):
+        mounts = [mounts]
+    return mounts
+
+
 def stop_container(name):
     """Stop a running container. Returns True on success."""
     return _run(["stop", name]).returncode == 0

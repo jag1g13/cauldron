@@ -40,12 +40,14 @@ static `podman-remote` client (checksum-verified and cached under
 socket into the container, and sets `CONTAINER_HOST`. Podman commands in the
 container then operate on the host's Podman, sharing images and build cache.
 
-The host must expose its socket, for example with
-`systemctl --user enable --now podman.socket`. Containers created from inside
-the container are siblings on the host rather than children of the project
-container, so the project directory must also exist on the host at the same
-absolute path; projects that live only inside the container cannot be
-bind-mounted.
+ The host must expose its socket, for example with
+ `systemctl --user enable --now podman.socket`. Containers created from inside
+ the container are siblings on the host rather than children of the project
+ container, so the project directory must also exist on the host at the same
+ absolute path; projects that live only inside the container cannot be
+ bind-mounted. `cauldron up` can itself be run from inside such a container; it
+ reuses the host socket and client already mounted into the container for the
+ new sibling.
 
 This grants the container full control of the host user's rootless Podman, so
 only enable it where that is acceptable. See

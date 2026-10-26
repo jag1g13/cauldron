@@ -3,7 +3,8 @@
 ## Status
 
 Implemented behind the `podman_socket` configuration flag. Validated manually
-end to end against a host running Podman 3.4.4.
+end to end against a host running Podman 3.4.4, including nested `cauldron up`
+run from inside a cauldron.
 
 ## Summary
 
@@ -100,6 +101,24 @@ which is the normal Cauldron model where the host project directory is
 bind-mounted at the same location. Project directories that live only inside the
 container cannot be bind-mounted by the host Podman.
 
+## Nested use
+
+`cauldron up` also works when run from inside a cauldron that is itself using the
+host socket. The command reaches the host Podman through the mounted static
+client, and the new container is a sibling on the host.
+
+The host-side paths are not visible from inside the container (the client is
+cached under the host user's home, the socket under the host's runtime
+directory), so Cauldron does not re-resolve them. It inspects its own container
+mounts to read the exact host socket directory and client the host bind-mounted
+in, and reuses those same host paths for the new container. The new sibling is
+therefore wired to the same host socket and client as its parent, and `cauldron
+up` can be nested to arbitrary depth.
+
+The current container id is taken from `CAULDRON_CONTAINER_ID` (an override for
+when it cannot be inferred), then the `HOSTNAME` environment variable, then the
+system hostname, which Podman sets to the container's id.
+
 ## Security
 
 Access to the Podman socket is equivalent to full control of the host user's
@@ -123,6 +142,9 @@ acceptable.
   bind-mount them when running inside a cauldron.
 - Downloading a real static client is covered by a test that is deselected by
   default and run with `pytest -m slow`.
+- The nested path is covered by unit tests for the remote detection, container id
+  resolution, and host-side path reuse, and by a CLI test asserting the sibling
+  container is run with the host's socket and client paths.
 - The full flow was validated manually: `cauldron up --build` inside the
   container reused the host's build cache, started a host sibling container, and
   `cauldron exec` succeeded.

@@ -675,6 +675,7 @@ def test_up_mounts_podman_socket(fake_podman, monkeypatch, tmp_path):
     container_is_running(fake_podman)
 
     with (
+        patch("cauldron.podman_remote.running_in_remote", return_value=False),
         patch(
             "cauldron.podman_remote.ensure_socket",
             return_value="/run/user/1000/podman/podman.sock",
@@ -689,6 +690,37 @@ def test_up_mounts_podman_socket(fake_podman, monkeypatch, tmp_path):
     assert "CONTAINER_HOST=unix:///run/podman-host/podman.sock" in run_calls[0]
 
 
+def test_up_nested_reuses_host_socket_and_client(fake_podman, monkeypatch, tmp_path):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text("[container]\npodman_socket = true\n")
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_is_running(fake_podman)
+
+    with (
+        patch("cauldron.podman_remote.running_in_remote", return_value=True),
+        patch(
+            "cauldron.podman_remote.host_backend_paths",
+            return_value=(
+                "/run/user/1000/podman/podman.sock",
+                "/home/host/.cache/cauldron/podman-remote/5.4.2/podman",
+            ),
+        ),
+    ):
+        result = invoke(["up"])
+
+    assert result.exit_code == 0
+    run_calls = [call for call in fake_podman.calls() if call[0] == "run"]
+    assert "/run/user/1000/podman:/run/podman-host" in run_calls[0]
+    assert (
+        "/home/host/.cache/cauldron/podman-remote/5.4.2/podman"
+        ":/usr/local/bin/cauldron-podman:ro" in run_calls[0]
+    )
+    assert "CONTAINER_HOST=unix:///run/podman-host/podman.sock" in run_calls[0]
+
+
 def test_up_reports_missing_podman_socket(fake_podman, monkeypatch, tmp_path):
     cauldron_dir = tmp_path / ".cauldron"
     cauldron_dir.mkdir()
@@ -697,9 +729,12 @@ def test_up_reports_missing_podman_socket(fake_podman, monkeypatch, tmp_path):
     containers_exist(fake_podman, returncode=1)
     fake_podman.respond(["image", "exists"], returncode=0)
 
-    with patch(
-        "cauldron.podman_remote.ensure_socket",
-        side_effect=podman_remote.RemoteError("no socket"),
+    with (
+        patch("cauldron.podman_remote.running_in_remote", return_value=False),
+        patch(
+            "cauldron.podman_remote.ensure_socket",
+            side_effect=podman_remote.RemoteError("no socket"),
+        ),
     ):
         result = invoke(["up"])
 
