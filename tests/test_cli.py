@@ -5,7 +5,6 @@ and control flow without in-process mocks of ``cauldron.podman``. Tests that
 need a live engine live in ``test_cli_integration.py``.
 """
 
-import pathlib
 import subprocess
 from contextlib import ExitStack
 from unittest.mock import patch

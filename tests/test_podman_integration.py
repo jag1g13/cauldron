@@ -44,7 +44,7 @@ def test_build_image(fast_image, scratch, tmp_path):
     dockerfile.write_text(f"FROM {fast_image}\nRUN echo cauldron-build-ok\n")
     tag = scratch.image("built")
 
-    assert podman.build_image(tag, dockerfile, tmp_path) is True
+    assert podman.build_image(tag, dockerfile, tmp_path).returncode == 0
     assert podman.image_exists(tag) is True
 
 
