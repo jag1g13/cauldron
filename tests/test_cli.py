@@ -256,6 +256,70 @@ def test_check_fails_when_podman_not_installed(fake_podman):
     assert "Check failed: podman is installed" in result.output
 
 
+def test_check_skips_socket_check_when_disabled(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    result = invoke(["check"])
+    assert result.exit_code == 0
+    assert "host Podman socket" not in result.output
+
+
+def test_check_reports_not_running_in_cauldron(fake_podman, monkeypatch):
+    with patch("cauldron.podman_remote.running_in_remote", return_value=False):
+        result = invoke(["check"])
+    assert result.exit_code == 0
+    assert "Not running inside a cauldron." in result.output
+
+
+def test_check_reports_running_in_cauldron(fake_podman, monkeypatch):
+    with patch("cauldron.podman_remote.running_in_remote", return_value=True):
+        result = invoke(["check"])
+    assert result.exit_code == 0
+    assert "Running inside an existing cauldron" in result.output
+
+
+def test_check_reports_socket_when_available(fake_podman, monkeypatch, tmp_path):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text("[container]\npodman_socket = true\n")
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("cauldron.podman_remote.running_in_remote", return_value=False),
+        patch(
+            "cauldron.podman_remote.ensure_socket",
+            return_value="/run/user/1000/podman/podman.sock",
+        ),
+    ):
+        result = invoke(["check"])
+
+    assert result.exit_code == 0
+    assert "Checking host Podman socket... ok" in result.output
+    assert "All checks passed." in result.output
+
+
+def test_check_warns_but_passes_when_socket_unavailable(
+    fake_podman, monkeypatch, tmp_path
+):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text("[container]\npodman_socket = true\n")
+    monkeypatch.chdir(tmp_path)
+
+    with (
+        patch("cauldron.podman_remote.running_in_remote", return_value=False),
+        patch(
+            "cauldron.podman_remote.ensure_socket",
+            side_effect=podman_remote.RemoteError("no socket"),
+        ),
+    ):
+        result = invoke(["check"])
+
+    assert result.exit_code == 0
+    assert "Checking host Podman socket... unavailable" in result.output
+    assert "warning: no socket" in result.output
+    assert "All checks passed." in result.output
+
+
 def test_up_rejects_conflicting_build_flags():
     result = invoke(["up", "--build", "--no-build"])
     assert result.exit_code != 0

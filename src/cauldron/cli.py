@@ -30,6 +30,13 @@ def check():
     """Check that dependencies are installed and Podman can pull, build, and run."""
     cfg = config.load_config()
     base_image = config.base_image(cfg)
+    podman_socket = config.container_podman_socket(cfg)
+
+    if podman_remote.running_in_remote():
+        click.echo("Running inside an existing cauldron (host Podman in use).")
+    else:
+        click.echo("Not running inside a cauldron.")
+
     steps = [
         ("podman is installed", podman.version),
         ("base image is available", lambda: podman.ensure_base_image(base_image)),
@@ -43,6 +50,18 @@ def check():
         else:
             click.echo("failed")
             raise click.ClickException(f"Check failed: {description}")
+
+    if podman_socket:
+        click.echo("Checking host Podman socket... ", nl=False)
+        try:
+            # When already running against the host socket there is nothing to
+            # verify; otherwise the host socket must exist at the default path.
+            if not podman_remote.running_in_remote():
+                podman_remote.ensure_socket()
+            click.echo("ok")
+        except podman_remote.RemoteError as exc:
+            click.echo("unavailable")
+            click.echo(f"warning: {exc}")
 
     click.echo("All checks passed.")
 
