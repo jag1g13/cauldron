@@ -158,4 +158,8 @@ def fake_podman(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_PODMAN_LOG", str(log))
     monkeypatch.setenv("FAKE_PODMAN_RESPONSES", str(responses))
     monkeypatch.setenv("FAKE_PODMAN_STATE", str(state))
+    # The fake is a controlled, non-remote podman: clear the host-socket marker
+    # so an ambient nested-cauldron environment does not switch commands into the
+    # nested code path. Nested tests set running_in_remote explicitly.
+    monkeypatch.delenv("CONTAINER_HOST", raising=False)
     return FakePodman(log, responses)

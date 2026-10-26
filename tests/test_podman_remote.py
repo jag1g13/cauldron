@@ -158,3 +158,67 @@ def test_host_backend_paths_raises_without_mounts(monkeypatch):
 
     with pytest.raises(podman_remote.RemoteError, match="podman_socket"):
         podman_remote.host_backend_paths()
+
+
+def test_host_sibling_mounts_reuses_host_paths_and_skips_managed(monkeypatch):
+    monkeypatch.setenv("CAULDRON_CONTAINER_ID", "abc")
+    monkeypatch.setattr(
+        "cauldron.podman.container_mounts",
+        lambda name: [
+            {"Source": "/proj", "Destination": "/proj", "RW": True},
+            {
+                "Source": "/run/user/1000/podman",
+                "Destination": "/run/podman-host",
+                "RW": True,
+            },
+            {
+                "Source": "/cache/podman",
+                "Destination": "/usr/local/bin/cauldron-podman",
+                "RW": False,
+            },
+            {
+                "Source": "/host/.gitconfig",
+                "Destination": "/home/cauldron/.gitconfig",
+                "RW": False,
+            },
+            {
+                "Source": "/run/user/1000/keyring/ssh",
+                "Destination": "/run/user/1000/keyring/ssh",
+                "RW": False,
+            },
+        ],
+    )
+
+    mounts = podman_remote.host_sibling_mounts("/proj")
+
+    assert mounts == [
+        {
+            "source": "/host/.gitconfig",
+            "target": "/home/cauldron/.gitconfig",
+            "options": "ro",
+        },
+        {
+            "source": "/run/user/1000/keyring/ssh",
+            "target": "/run/user/1000/keyring/ssh",
+            "options": "ro",
+        },
+    ]
+
+
+def test_host_sibling_env_drops_managed_keys(monkeypatch):
+    monkeypatch.setenv("CAULDRON_CONTAINER_ID", "abc")
+    monkeypatch.setattr(
+        "cauldron.podman.container_env_of",
+        lambda name: {
+            "HOME": "/home/cauldron",
+            "CONTAINER_HOST": "unix:///run/podman-host/podman.sock",
+            "CAULDRON_PODMAN_PATH": "/usr/local/bin/cauldron-podman",
+            "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+            "SHELL": "/bin/bash",
+        },
+    )
+
+    assert podman_remote.host_sibling_env() == {
+        "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+        "SHELL": "/bin/bash",
+    }

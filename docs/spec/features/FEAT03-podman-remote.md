@@ -115,6 +115,15 @@ in, and reuses those same host paths for the new container. The new sibling is
 therefore wired to the same host socket and client as its parent, and `cauldron
 up` can be nested to arbitrary depth.
 
+The same applies to the user-configured mounts and environment. Re-expanding
+them in-container (e.g. `$HOME`, `$SSH_AUTH_SOCK`) would yield cauldron-local
+paths that the host cannot bind-mount, so instead the sibling reuses the
+current container's actual host->container mounts (minus the cauldron-managed
+project dir, socket, and client) and its host-resource environment variables
+(again minus the keys Cauldron manages itself, such as `HOME` and
+`CONTAINER_HOST`). The sibling therefore has the same host resource access as
+its parent.
+
 The current container id is taken from `CAULDRON_CONTAINER_ID` (an override for
 when it cannot be inferred), then the `HOSTNAME` environment variable, then the
 system hostname, which Podman sets to the container's id.

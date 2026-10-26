@@ -330,18 +330,27 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 )
 
     click.echo(f"Starting container {container}...")
-    container_env = config.container_env(cfg)
+    nested = podman_remote.running_in_remote()
     socket_path = None
     client_path = None
     if podman_socket:
         try:
-            if podman_remote.running_in_remote():
+            if nested:
                 socket_path, client_path = podman_remote.host_backend_paths()
             else:
                 socket_path = podman_remote.ensure_socket()
                 client_path = podman_remote.ensure_client()
         except podman_remote.RemoteError as exc:
             raise click.ClickException(str(exc)) from exc
+    if nested:
+        # Nested: reuse this cauldron's host mounts and env instead of re-deriving
+        # them from the config, whose env-var expansion would yield cauldron-local
+        # paths the host cannot bind-mount.
+        mounts = podman_remote.host_sibling_mounts(project_dir)
+        env = podman_remote.host_sibling_env()
+    else:
+        mounts = config.container_mounts(cfg)
+        env = config.container_env(cfg)
     if not podman.run_container(
         name=container,
         image=image,
@@ -349,8 +358,8 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         project_dir=project_dir,
         uid=uid,
         gid=gid,
-        env=container_env,
-        mounts=config.container_mounts(cfg),
+        env=env,
+        mounts=mounts,
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
         podman_socket=socket_path,

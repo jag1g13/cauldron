@@ -46,8 +46,10 @@ container then operate on the host's Podman, sharing images and build cache.
  container, so the project directory must also exist on the host at the same
  absolute path; projects that live only inside the container cannot be
  bind-mounted. `cauldron up` can itself be run from inside such a container; it
- reuses the host socket and client already mounted into the container for the
- new sibling.
+ reuses the host socket, client, mounts, and environment already set on the
+ current container for the new sibling, so `source`/`env` values like `$HOME`
+ and `$SSH_AUTH_SOCK` resolve to the same host resources as before rather than
+ re-expanding to paths inside the container.
 
 This grants the container full control of the host user's rootless Podman, so
 only enable it where that is acceptable. See

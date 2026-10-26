@@ -269,3 +269,45 @@ def host_backend_paths():
         if tail:
             socket_name = tail
     return pathlib.Path(socket_dir) / socket_name, pathlib.Path(client)
+
+
+def host_sibling_mounts(project_dir):
+    """Return the current cauldron's host->container bind mounts for a sibling.
+
+    Re-deriving the config's mounts by expanding env vars inside this container
+    yields cauldron-local paths the host cannot bind-mount, so instead reuse the
+    actual host paths this container was mounted from. The cauldron-managed
+    mounts (project dir, host socket, static client) are omitted; run_container
+    adds those itself.
+    """
+    skip = {str(project_dir), "/run/podman-host", "/usr/local/bin/cauldron-podman"}
+    mounts = []
+    for mount in podman.container_mounts(_container_id()):
+        destination = mount.get("Destination")
+        source = mount.get("Source")
+        if not source or destination in skip:
+            continue
+        mounts.append(
+            {
+                "source": source,
+                "target": destination,
+                "options": "ro" if not mount.get("RW", True) else "rw",
+            }
+        )
+    return mounts
+
+
+def host_sibling_env():
+    """Return the current cauldron's environment for a sibling container.
+
+    Reuses the host-resource values already set on this container (for example
+    ``SSH_AUTH_SOCK``) instead of re-expanding env vars in-container. The keys
+    run_container manages itself (HOME, CONTAINER_HOST, CAULDRON_PODMAN_PATH)
+    are dropped so it can set them for the sibling.
+    """
+    managed = {"HOME", "CONTAINER_HOST", "CAULDRON_PODMAN_PATH"}
+    return {
+        key: value
+        for key, value in podman.container_env_of(_container_id()).items()
+        if key not in managed
+    }
