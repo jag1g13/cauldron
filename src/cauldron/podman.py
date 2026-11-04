@@ -13,6 +13,8 @@ from cauldron.project import DEFAULT_CONTAINER_PREFIX
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
+PODMAN_CLIENT_PATH = "/usr/local/bin/cauldron-podman"
+PODMAN_ALIAS_PATH = "/usr/local/bin/podman"
 
 _verbose = False
 
@@ -348,8 +350,15 @@ def run_container(
         socket_dir = pathlib.Path(podman_socket).parent
         socket_name = pathlib.Path(podman_socket).name
         podman_socket_url = f"unix:///run/podman-host/{socket_name}"
+        # The host socket is not relabelled for the container's security
+        # context, so connecting to it fails under SELinux unless labelling is
+        # disabled (as the podman-system-service documentation requires).
+        args.extend(["--security-opt", "label=disable"])
         args.extend(["-v", f"{socket_dir}:/run/podman-host"])
-        args.extend(["-v", f"{podman_client}:/usr/local/bin/cauldron-podman:ro"])
+        args.extend(["-v", f"{podman_client}:{PODMAN_CLIENT_PATH}:ro"])
+        # Also expose the client as `podman` on PATH so the documented
+        # `podman build` workflow uses the matching client, not the image's.
+        args.extend(["-v", f"{podman_client}:{PODMAN_ALIAS_PATH}:ro"])
 
     selinux = _selinux_enabled()
     for mount in mounts or []:
@@ -370,7 +379,7 @@ def run_container(
     env = env or {}
     if podman_socket_url:
         env["CONTAINER_HOST"] = podman_socket_url
-        env["CAULDRON_PODMAN_PATH"] = "/usr/local/bin/cauldron-podman"
+        env["CAULDRON_PODMAN_PATH"] = PODMAN_CLIENT_PATH
     if "PATH" in env and "${PATH}" in env["PATH"]:
         image_path = image_env(image).get("PATH", "")
         env["PATH"] = env["PATH"].replace("${PATH}", image_path)

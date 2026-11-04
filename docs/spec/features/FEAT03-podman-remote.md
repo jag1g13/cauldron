@@ -78,6 +78,11 @@ When `podman_socket` is enabled, `run_container` mounts:
 
 - the socket directory at `/run/podman-host`;
 - the cached static client at `/usr/local/bin/cauldron-podman` (read-only);
+- the same client again at `/usr/local/bin/podman` (read-only), so the
+  documented `podman ...` workflow resolves to the matching client on `PATH`;
+
+adds `--security-opt label=disable` (the host socket is not relabelled for the
+container's security context, so SELinux would otherwise deny the connection);
 
 and sets:
 

@@ -386,6 +386,11 @@ def test_run_container_mounts_podman_socket_and_client(fake_podman):
         "/home/deck/.cache/cauldron/podman-remote/5.4.2/podman:"
         "/usr/local/bin/cauldron-podman:ro" in args
     )
+    assert (
+        "/home/deck/.cache/cauldron/podman-remote/5.4.2/podman:"
+        "/usr/local/bin/podman:ro" in args
+    )
+    assert "label=disable" in args
     assert "CONTAINER_HOST=unix:///run/podman-host/podman.sock" in args
     assert "CAULDRON_PODMAN_PATH=/usr/local/bin/cauldron-podman" in args
 

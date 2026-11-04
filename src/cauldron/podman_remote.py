@@ -269,7 +269,7 @@ def host_backend_paths():
         destination = mount.get("Destination")
         if destination == "/run/podman-host":
             socket_dir = mount.get("Source")
-        elif destination == "/usr/local/bin/cauldron-podman":
+        elif destination == podman.PODMAN_CLIENT_PATH:
             client = mount.get("Source")
     if not socket_dir or not client:
         raise RemoteError(
@@ -296,7 +296,12 @@ def host_sibling_mounts(project_dir):
     mounts (project dir, host socket, static client) are omitted; run_container
     adds those itself.
     """
-    skip = {str(project_dir), "/run/podman-host", "/usr/local/bin/cauldron-podman"}
+    skip = {
+        str(project_dir),
+        "/run/podman-host",
+        podman.PODMAN_CLIENT_PATH,
+        podman.PODMAN_ALIAS_PATH,
+    }
     mounts = []
     for mount in podman.container_mounts(_container_id()):
         destination = mount.get("Destination")

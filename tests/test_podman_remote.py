@@ -254,6 +254,11 @@ def test_host_sibling_mounts_reuses_host_paths_and_skips_managed(monkeypatch):
                 "RW": False,
             },
             {
+                "Source": "/cache/podman",
+                "Destination": "/usr/local/bin/podman",
+                "RW": False,
+            },
+            {
                 "Source": "/host/.gitconfig",
                 "Destination": "/home/cauldron/.gitconfig",
                 "RW": False,
