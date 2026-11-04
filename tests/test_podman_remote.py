@@ -79,7 +79,13 @@ def test_ensure_client_downloads_and_extracts(tmp_path, monkeypatch):
             path.write_text("binary")
             path.chmod(0o644)
 
-    with patch("cauldron.podman_remote._fetch_checksums", return_value={}):
+    import hashlib
+
+    asset = "podman-remote-static-linux_amd64.tar.gz"
+    digest = hashlib.sha256(b"archive").hexdigest()
+    with patch(
+        "cauldron.podman_remote._fetch_checksums", return_value={asset: digest}
+    ):
         with patch("cauldron.podman_remote._download", side_effect=fake_download):
             with patch(
                 "cauldron.podman_remote.tarfile.open", return_value=FakeArchive()
@@ -89,6 +95,36 @@ def test_ensure_client_downloads_and_extracts(tmp_path, monkeypatch):
     assert binary == podman_remote._cache_dir(version) / "podman"
     assert binary.exists()
     assert binary.stat().st_mode & 0o111
+
+
+def test_ensure_client_fails_when_checksum_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    def fake_download(_url, destination):
+        pathlib.Path(destination).write_bytes(b"archive")
+        return destination
+
+    with patch("cauldron.podman_remote._fetch_checksums", return_value={}):
+        with patch("cauldron.podman_remote._download", side_effect=fake_download):
+            with pytest.raises(podman_remote.RemoteError):
+                podman_remote.ensure_client(version="5.4.2", arch="amd64")
+
+
+def test_ensure_client_fails_on_checksum_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    def fake_download(_url, destination):
+        pathlib.Path(destination).write_bytes(b"archive")
+        return destination
+
+    asset = "podman-remote-static-linux_amd64.tar.gz"
+    with patch(
+        "cauldron.podman_remote._fetch_checksums",
+        return_value={asset: "0" * 64},
+    ):
+        with patch("cauldron.podman_remote._download", side_effect=fake_download):
+            with pytest.raises(podman_remote.RemoteError):
+                podman_remote.ensure_client(version="5.4.2", arch="amd64")
 
 
 @pytest.mark.slow

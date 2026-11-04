@@ -115,9 +115,16 @@ def _download(url, destination):
 
 
 def _verify(path, expected):
-    """Verify the sha256 of ``path`` against ``expected``."""
+    """Verify the sha256 of ``path`` against ``expected``.
+
+    Raises :class:`RemoteError` when no expected digest is available, so an
+    unverified client is never accepted, or when the digest does not match.
+    """
     if not expected:
-        return
+        raise RemoteError(
+            f"No checksum found for {path.name}; refusing to use an "
+            "unverified Podman client."
+        )
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     if digest != expected:
         path.unlink()
