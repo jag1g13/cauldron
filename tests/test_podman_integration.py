@@ -5,11 +5,25 @@ These are skipped automatically when no Podman is reachable (see
 instead of asserting the exact command line.
 """
 
+import os
+
 import pytest
 
 from cauldron import podman
 
 pytestmark = pytest.mark.integration
+
+
+def _owner_ids(path):
+    """Return the temp dir owner's ``(uid, gid)`` as strings.
+
+    Deriving the IDs from the temp directory's owner (rather than a hardcoded
+    1000) lets the live tests run on hosts where the test user is not
+    uid/gid 1000: ``--userns keep-id`` maps the container user onto the host
+    user that owns the mounted temp directory.
+    """
+    st = os.stat(path)
+    return str(st.st_uid), str(st.st_gid)
 
 
 def test_version_reports_success(podman_service):
@@ -56,14 +70,15 @@ def test_build_project_image(base_image, scratch):
 
 def test_container_lifecycle(base_image, scratch, tmp_path):
     name = scratch.container()
+    uid, gid = _owner_ids(tmp_path)
     assert (
         podman.run_container(
             name=name,
             image=base_image,
             workdir=str(tmp_path),
             project_dir=str(tmp_path),
-            uid="1000",
-            gid="1000",
+            uid=uid,
+            gid=gid,
         )
         is True
     )
@@ -90,13 +105,14 @@ def test_container_lifecycle(base_image, scratch, tmp_path):
 
 def test_list_containers_includes_labelled_container(base_image, scratch, tmp_path):
     name = scratch.container()
+    uid, gid = _owner_ids(tmp_path)
     podman.run_container(
         name=name,
         image=base_image,
         workdir=str(tmp_path),
         project_dir=str(tmp_path),
-        uid="1000",
-        gid="1000",
+        uid=uid,
+        gid=gid,
     )
 
     containers = podman.list_containers(all_containers=True)
@@ -107,13 +123,14 @@ def test_list_containers_includes_labelled_container(base_image, scratch, tmp_pa
 
 def test_exec_helpers(base_image, scratch, tmp_path):
     name = scratch.container()
+    uid, gid = _owner_ids(tmp_path)
     podman.run_container(
         name=name,
         image=base_image,
         workdir=str(tmp_path),
         project_dir=str(tmp_path),
-        uid="1000",
-        gid="1000",
+        uid=uid,
+        gid=gid,
     )
 
     assert podman.exec_check(name, ["true"]) is True
@@ -127,13 +144,14 @@ def test_exec_helpers(base_image, scratch, tmp_path):
 
 def test_run_container_applies_environment(base_image, scratch, tmp_path):
     name = scratch.container()
+    uid, gid = _owner_ids(tmp_path)
     podman.run_container(
         name=name,
         image=base_image,
         workdir=str(tmp_path),
         project_dir=str(tmp_path),
-        uid="1000",
-        gid="1000",
+        uid=uid,
+        gid=gid,
         env={"CAULDRON_TEST_VALUE": "hello"},
     )
 
