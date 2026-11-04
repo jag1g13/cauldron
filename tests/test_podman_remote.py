@@ -83,9 +83,7 @@ def test_ensure_client_downloads_and_extracts(tmp_path, monkeypatch):
 
     asset = "podman-remote-static-linux_amd64.tar.gz"
     digest = hashlib.sha256(b"archive").hexdigest()
-    with patch(
-        "cauldron.podman_remote._fetch_checksums", return_value={asset: digest}
-    ):
+    with patch("cauldron.podman_remote._fetch_checksums", return_value={asset: digest}):
         with patch("cauldron.podman_remote._download", side_effect=fake_download):
             with patch(
                 "cauldron.podman_remote.tarfile.open", return_value=FakeArchive()
@@ -127,9 +125,7 @@ def test_ensure_client_fails_on_checksum_mismatch(tmp_path, monkeypatch):
                 podman_remote.ensure_client(version="5.4.2", arch="amd64")
 
 
-def test_ensure_client_publishes_atomically_and_cleans_staging(
-    tmp_path, monkeypatch
-):
+def test_ensure_client_publishes_atomically_and_cleans_staging(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     version = "5.4.2"
 
@@ -153,9 +149,7 @@ def test_ensure_client_publishes_atomically_and_cleans_staging(
 
     asset = "podman-remote-static-linux_amd64.tar.gz"
     digest = hashlib.sha256(b"archive").hexdigest()
-    with patch(
-        "cauldron.podman_remote._fetch_checksums", return_value={asset: digest}
-    ):
+    with patch("cauldron.podman_remote._fetch_checksums", return_value={asset: digest}):
         with patch("cauldron.podman_remote._download", side_effect=fake_download):
             with patch(
                 "cauldron.podman_remote.tarfile.open", return_value=FakeArchive()

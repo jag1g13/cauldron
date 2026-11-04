@@ -120,7 +120,10 @@ def test_build_remote_uri_format():
     assert "Host cauldron-foo" in uri
     assert "User cauldron" in uri
     assert "IdentityFile ~/.config/cauldron/ssh/id_ed25519" in uri
-    assert f"ProxyCommand {shlex.quote(podman._podman_bin())} exec -u 0 -i cauldron-foo" in uri
+    assert (
+        f"ProxyCommand {shlex.quote(podman._podman_bin())} exec -u 0 -i cauldron-foo"
+        in uri
+    )
     assert "/usr/sbin/sshd -i" in uri
     assert "UsePAM=no" in uri
     assert "PasswordAuthentication=no" in uri
