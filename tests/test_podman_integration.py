@@ -79,8 +79,8 @@ def test_container_lifecycle(base_image, scratch, tmp_path):
             project_dir=str(tmp_path),
             uid=uid,
             gid=gid,
-        )
-        is True
+        ).returncode
+        == 0
     )
 
     assert podman.container_exists(name) is True
@@ -90,10 +90,10 @@ def test_container_lifecycle(base_image, scratch, tmp_path):
     assert podman.stop_container(name) is True
     assert podman.container_running(name) is False
 
-    assert podman.start_container(name) is True
+    assert podman.start_container(name).returncode == 0
     assert podman.container_running(name) is True
 
-    assert podman.restart_container(name) is True
+    assert podman.restart_container(name).returncode == 0
     assert podman.container_running(name) is True
 
     assert podman.remove_container(name, force=True) is True

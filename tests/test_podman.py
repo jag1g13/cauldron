@@ -34,6 +34,25 @@ def test_run_streams_output_when_verbose(fake_podman):
     assert result.stdout == "fake-version\n"
 
 
+def test_quiet_command_does_not_stream_when_verbose(fake_podman, capsys):
+    fake_podman.respond(
+        ["container", "inspect"], stdout='[{"Source":"/a","Destination":"/b"}]\n'
+    )
+    podman.set_verbose(True)
+    result = podman.container_mounts("cauldron-foo")
+
+    assert result == [{"Source": "/a", "Destination": "/b"}]
+    assert capsys.readouterr().out == ""
+
+
+def test_non_quiet_command_streams_when_verbose(fake_podman, capsys):
+    fake_podman.respond(["version"], stdout="fake-version\n")
+    podman.set_verbose(True)
+    podman._run(["version"])
+
+    assert "fake-version" in capsys.readouterr().out
+
+
 def test_run_returns_nonzero_when_podman_not_found(monkeypatch):
     monkeypatch.setenv("CAULDRON_PODMAN_PATH", "/nonexistent/podman")
     result = podman._run(["version"])
@@ -225,8 +244,8 @@ def test_run_container_passes_env_vars(fake_podman):
             uid="1000",
             gid="1000",
             env={"EDITOR": "vim", "FOO": "bar"},
-        )
-        is True
+        ).returncode
+        == 0
     )
     args = fake_podman.calls()[0]
     assert "EDITOR=vim" in args
@@ -257,8 +276,8 @@ def test_run_container_mounts_defaults(fake_podman):
             project_dir="/home/deck/projects/foo",
             uid="1000",
             gid="1000",
-        )
-        is True
+        ).returncode
+        == 0
     )
     args = fake_podman.calls()[0]
     assert "run" in args
@@ -464,12 +483,12 @@ def test_run_container_does_not_warn_when_selinux_disabled(fake_podman):
 
 
 def test_start_container_runs_podman_start(fake_podman):
-    assert podman.start_container("cauldron-foo") is True
+    assert podman.start_container("cauldron-foo").returncode == 0
     assert fake_podman.calls() == [["start", "cauldron-foo"]]
 
 
 def test_restart_container_runs_podman_restart(fake_podman):
-    assert podman.restart_container("cauldron-foo") is True
+    assert podman.restart_container("cauldron-foo").returncode == 0
     assert fake_podman.calls() == [["restart", "cauldron-foo"]]
 
 
@@ -568,6 +587,7 @@ def test_list_containers_parses_podman_ps_json(fake_podman):
     assert containers[0]["image"] == "cauldron-foo:latest"
     assert containers[0]["status"] == "running"
     assert containers[0]["ports"] == ["0.0.0.0:2222->22/tcp"]
+    assert containers[0]["host_ports"] == [2222]
     assert containers[0]["project_dir"] == "/home/deck/projects/foo"
 
 
@@ -588,6 +608,80 @@ def test_list_containers_formats_ports_with_camel_case_keys(fake_podman):
 def test_list_containers_returns_empty_on_failure(fake_podman):
     fake_podman.respond(["ps"], returncode=1)
     assert podman.list_containers() == []
+
+
+def test_is_port_in_use_error_matches_bind_failure():
+    assert (
+        podman.is_port_in_use_error(
+            "Error: rootlessport listen tcp 0.0.0.0:8000: bind: address already in use"
+        )
+        is True
+    )
+
+
+def test_is_port_in_use_error_rejects_unrelated_output():
+    assert podman.is_port_in_use_error("Error: some other failure") is False
+    assert podman.is_port_in_use_error("") is False
+    assert podman.is_port_in_use_error(None) is False
+
+
+def test_port_from_error_extracts_port():
+    assert (
+        podman.port_from_error(
+            "Error: rootlessport listen tcp 0.0.0.0:8000: bind: address already in use"
+        )
+        == 8000
+    )
+    assert (
+        podman.port_from_error("... 127.0.0.1:9119: bind: address already in use")
+        == 9119
+    )
+
+
+def test_port_from_error_returns_none_when_absent():
+    assert podman.port_from_error("Error: something else") is None
+    assert podman.port_from_error("") is None
+    assert podman.port_from_error(None) is None
+
+
+def test_find_port_owner_returns_running_cauldron_container(fake_podman):
+    json_output = """[
+        {
+            "Names": ["cauldron-cauldron"],
+            "Image": "cauldron-cauldron:latest",
+            "State": "running",
+            "Ports": [
+                {"host_ip": "0.0.0.0", "host_port": 8000, "container_port": 8000, "protocol": "tcp"}
+            ]
+        },
+        {
+            "Names": ["cauldron-solar"],
+            "Image": "cauldron-solar:latest",
+            "State": "running",
+            "Ports": [
+                {"host_ip": "0.0.0.0", "host_port": 8501, "container_port": 8501, "protocol": "tcp"}
+            ]
+        }
+    ]"""
+    fake_podman.respond(["ps"], stdout=json_output)
+    assert podman.find_port_owner(8000) == ["cauldron-cauldron"]
+    assert podman.find_port_owner("8501") == ["cauldron-solar"]
+
+
+def test_find_port_owner_returns_empty_when_unowned(fake_podman):
+    json_output = """[
+        {
+            "Names": ["cauldron-solar"],
+            "Image": "cauldron-solar:latest",
+            "State": "running",
+            "Ports": [
+                {"host_ip": "0.0.0.0", "host_port": 8501, "container_port": 8501, "protocol": "tcp"}
+            ]
+        }
+    ]"""
+    fake_podman.respond(["ps"], stdout=json_output)
+    assert podman.find_port_owner(8000) == []
+    assert podman.find_port_owner(None) == []
 
 
 def test_build_project_image_copies_scripts_and_runs_post_build(tmp_path):

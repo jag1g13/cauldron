@@ -144,6 +144,8 @@ ports = [
 
 Project ports override global ports when they refer to the same host port.
 
+If a container fails to start because a host port is already in use, `cauldron up` names the other Cauldron container (if any) that holds the port, so you know which one to stop or reconfigure.
+
 ### Known hosts
 
 Use the `[container]` table to append entries to the container's `/etc/hosts` file for custom domain resolution.

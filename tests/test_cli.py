@@ -69,7 +69,10 @@ def _common_up_patches(tmp_path):
         patch("cauldron.podman.container_exists", return_value=False),
         patch("cauldron.podman.image_exists", return_value=False),
         patch("cauldron.podman.ensure_base_image", return_value=True),
-        patch("cauldron.podman.run_container", return_value=True),
+        patch(
+            "cauldron.podman.run_container",
+            return_value=subprocess.CompletedProcess(args=[], returncode=0),
+        ),
         patch("cauldron.podman.container_running", return_value=True),
         patch("cauldron.project.pathlib.Path.cwd", return_value=tmp_path),
         patch("cauldron.config.CONFIG_GLOBAL_PATH", tmp_path / "missing.toml"),
@@ -335,6 +338,115 @@ def test_up_restarts_existing_running_container(fake_podman, monkeypatch, tmp_pa
     assert result.exit_code == 0
     assert "Restarting container" in result.output
     assert any(call[0] == "restart" for call in fake_podman.calls())
+
+
+def _ps_json(entries):
+    """Render a podman ps JSON list from ``(name, host_port)`` entries."""
+    import json as _json
+
+    return _json.dumps(
+        [
+            {
+                "Names": [name],
+                "Image": f"{name}:latest",
+                "State": "running",
+                "Ports": [
+                    {
+                        "host_ip": "0.0.0.0",
+                        "host_port": port,
+                        "container_port": port,
+                        "protocol": "tcp",
+                    }
+                ],
+            }
+            for name, port in entries
+        ]
+    )
+
+
+PORT_BIND_STDERR = (
+    "Error: rootlessport listen tcp 0.0.0.0:8000: bind: address already in use"
+)
+
+
+def test_up_restart_reports_cauldron_port_owner(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    fake_podman.respond(["restart"], returncode=1, stderr=PORT_BIND_STDERR)
+    fake_podman.respond(["ps"], stdout=_ps_json([("cauldron-cauldron", 8000)]))
+
+    result = invoke(["up"])
+
+    assert result.exit_code != 0
+    assert "Failed to restart container" in result.output
+    assert (
+        "Port 8000 is already in use by cauldron container cauldron-cauldron"
+        in result.output
+    )
+
+
+def test_up_restart_reports_port_in_use_by_non_cauldron(
+    fake_podman, monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    fake_podman.respond(["restart"], returncode=1, stderr=PORT_BIND_STDERR)
+    fake_podman.respond(["ps"], stdout=_ps_json([("cauldron-solar", 8501)]))
+
+    result = invoke(["up"])
+
+    assert result.exit_code != 0
+    assert "Port 8000 is already in use" in result.output
+    assert "no cauldron container holds it" in result.output
+
+
+def test_up_restart_no_hint_for_non_port_failure(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    fake_podman.respond(
+        ["restart"], returncode=1, stderr="Error: failed to talk to pid 1"
+    )
+
+    result = invoke(["up"])
+
+    assert result.exit_code != 0
+    assert "Failed to restart container" in result.output
+    assert "address already in use" not in result.output
+    assert "Port " not in result.output
+
+
+def test_up_run_reports_cauldron_port_owner(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    fake_podman.respond(["run"], returncode=1, stderr=PORT_BIND_STDERR)
+    fake_podman.respond(["ps"], stdout=_ps_json([("cauldron-cauldron", 8000)]))
+
+    result = invoke(["up"])
+
+    assert result.exit_code != 0
+    assert "Failed to start container" in result.output
+    assert (
+        "Port 8000 is already in use by cauldron container cauldron-cauldron"
+        in result.output
+    )
+
+
+def test_exec_start_reports_cauldron_port_owner(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    fake_podman.respond(["container", "inspect"], stdout="false\n", times=1)
+    fake_podman.respond(["start"], returncode=1, stderr=PORT_BIND_STDERR)
+    fake_podman.respond(["ps"], stdout=_ps_json([("cauldron-cauldron", 8000)]))
+
+    result = invoke(["exec", "pwd"])
+
+    assert result.exit_code != 0
+    assert "Failed to start container" in result.output
+    assert (
+        "Port 8000 is already in use by cauldron container cauldron-cauldron"
+        in result.output
+    )
 
 
 def test_up_build_rebuilds_and_replaces_existing_container(

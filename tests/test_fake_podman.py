@@ -44,8 +44,8 @@ def test_fake_captures_run_container_arguments(fake_podman):
             mounts=[{"source": "/host/extra", "target": "/extra", "options": "ro"}],
             ports=["8080:8080"],
             known_hosts=["my-service.local:127.0.0.1"],
-        )
-        is True
+        ).returncode
+        == 0
     )
 
     argv = fake_podman.calls()[0]
