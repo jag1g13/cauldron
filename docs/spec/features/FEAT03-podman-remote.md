@@ -120,14 +120,17 @@ in, and reuses those same host paths for the new container. The new sibling is
 therefore wired to the same host socket and client as its parent, and `cauldron
 up` can be nested to arbitrary depth.
 
-The same applies to the user-configured mounts and environment. Re-expanding
-them in-container (e.g. `$HOME`, `$SSH_AUTH_SOCK`) would yield cauldron-local
-paths that the host cannot bind-mount, so instead the sibling reuses the
-current container's actual host->container mounts (minus the cauldron-managed
-project dir, socket, and client) and its host-resource environment variables
-(again minus the keys Cauldron manages itself, such as `HOME` and
-`CONTAINER_HOST`). The sibling therefore has the same host resource access as
-its parent.
+The same applies to the user-configured mounts. Re-expanding them in-container
+(e.g. `$HOME`) would yield cauldron-local paths that the host cannot bind-mount,
+so the sibling reuses the current container's actual host->container mounts
+(minus the cauldron-managed project dir, socket, and client). The sibling
+therefore has the same host resource access as its parent.
+
+The environment is different: it is always the requested project's own `[env]`
+config, not the parent's. Re-expanding it in-container is safe because the
+host-resource values it references (e.g. `$SSH_AUTH_SOCK`) already hold the real
+host paths inherited from the parent, and the target image's defaults (such as
+`PATH`) are left intact instead of being replaced by the parent's values.
 
 The current container id is taken from `CAULDRON_CONTAINER_ID` (an override for
 when it cannot be inferred), then the `HOSTNAME` environment variable, then the

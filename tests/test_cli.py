@@ -772,7 +772,6 @@ def test_up_nested_reuses_host_socket_and_client(fake_podman, monkeypatch, tmp_p
             ),
         ),
         patch("cauldron.podman_remote.host_sibling_mounts", return_value=[]),
-        patch("cauldron.podman_remote.host_sibling_env", return_value={}),
     ):
         result = invoke(["up"])
 
@@ -786,11 +785,22 @@ def test_up_nested_reuses_host_socket_and_client(fake_podman, monkeypatch, tmp_p
     assert "CONTAINER_HOST=unix:///run/podman-host/podman.sock" in run_calls[0]
 
 
-def test_up_nested_reuses_host_mounts_and_env(fake_podman, monkeypatch, tmp_path):
+def test_up_nested_reuses_host_mounts_and_applies_project_env(
+    fake_podman, monkeypatch, tmp_path
+):
     cauldron_dir = tmp_path / ".cauldron"
     cauldron_dir.mkdir()
-    (cauldron_dir / "cauldron.toml").write_text("[container]\npodman_socket = true\n")
+    (cauldron_dir / "cauldron.toml").write_text(
+        "[container]\n"
+        "podman_socket = true\n"
+        "\n"
+        "[env]\n"
+        'SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"\n'
+        'EDITOR = "vim"\n'
+    )
     monkeypatch.chdir(tmp_path)
+    # Simulates the real host value already inherited from the parent cauldron.
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/run/user/1000/keyring/ssh")
     containers_exist(fake_podman, returncode=1)
     fake_podman.respond(["image", "exists"], returncode=0)
     container_is_running(fake_podman)
@@ -814,17 +824,17 @@ def test_up_nested_reuses_host_mounts_and_env(fake_podman, monkeypatch, tmp_path
                 }
             ],
         ),
-        patch(
-            "cauldron.podman_remote.host_sibling_env",
-            return_value={"SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh"},
-        ),
     ):
         result = invoke(["up"])
 
     assert result.exit_code == 0
     run_calls = [call for call in fake_podman.calls() if call[0] == "run"]
+    # Host mounts are reused from the parent ...
     assert "/home/host/.gitconfig:/home/cauldron/.gitconfig:ro" in run_calls[0]
+    # ... and the env is the requested project's own config, with host-resource
+    # values resolving to the inherited host path.
     assert "SSH_AUTH_SOCK=/run/user/1000/keyring/ssh" in run_calls[0]
+    assert "EDITOR=vim" in run_calls[0]
 
 
 def test_up_reports_missing_podman_socket(fake_podman, monkeypatch, tmp_path):

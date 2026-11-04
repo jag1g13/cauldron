@@ -343,14 +343,17 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         except podman_remote.RemoteError as exc:
             raise click.ClickException(str(exc)) from exc
     if nested:
-        # Nested: reuse this cauldron's host mounts and env instead of re-deriving
-        # them from the config, whose env-var expansion would yield cauldron-local
-        # paths the host cannot bind-mount.
+        # Nested: reuse this cauldron's host mounts, since re-deriving them from
+        # the config would expand $HOME etc. to cauldron-local paths the host
+        # cannot bind-mount.
         mounts = podman_remote.host_sibling_mounts(project_dir)
-        env = podman_remote.host_sibling_env()
     else:
         mounts = config.container_mounts(cfg)
-        env = config.container_env(cfg)
+    # The env is always the requested project's own config. When nested, its
+    # host-resource values (e.g. $SSH_AUTH_SOCK) already resolve to the real
+    # host paths inherited from the parent, and the target image's defaults
+    # (PATH, etc.) are left intact rather than being replaced by the parent's.
+    env = config.container_env(cfg)
     if not podman.run_container(
         name=container,
         image=image,

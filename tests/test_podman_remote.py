@@ -287,25 +287,6 @@ def test_host_sibling_mounts_reuses_host_paths_and_skips_managed(monkeypatch):
     ]
 
 
-def test_host_sibling_env_drops_managed_keys(monkeypatch):
-    monkeypatch.setenv("CAULDRON_CONTAINER_ID", "abc")
-    monkeypatch.setattr(
-        "cauldron.podman.container_env_of",
-        lambda name: {
-            "HOME": "/home/cauldron",
-            "CONTAINER_HOST": "unix:///run/podman-host/podman.sock",
-            "CAULDRON_PODMAN_PATH": "/usr/local/bin/cauldron-podman",
-            "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
-            "SHELL": "/bin/bash",
-        },
-    )
-
-    assert podman_remote.host_sibling_env() == {
-        "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
-        "SHELL": "/bin/bash",
-    }
-
-
 @pytest.mark.integration
 def test_host_backend_paths_match_live_container_mounts(podman_service):
     if not podman_remote.running_in_remote():

@@ -316,19 +316,3 @@ def host_sibling_mounts(project_dir):
             }
         )
     return mounts
-
-
-def host_sibling_env():
-    """Return the current cauldron's environment for a sibling container.
-
-    Reuses the host-resource values already set on this container (for example
-    ``SSH_AUTH_SOCK``) instead of re-expanding env vars in-container. The keys
-    run_container manages itself (HOME, CONTAINER_HOST, CAULDRON_PODMAN_PATH)
-    are dropped so it can set them for the sibling.
-    """
-    managed = {"HOME", "CONTAINER_HOST", "CAULDRON_PODMAN_PATH"}
-    return {
-        key: value
-        for key, value in podman.container_env_of(_container_id()).items()
-        if key not in managed
-    }
