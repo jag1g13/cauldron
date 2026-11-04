@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -42,16 +43,19 @@ def _stream_pipe(pipe, lines, file):
     pipe.close()
 
 
-def _run(args, **kwargs):
+def _run(args, quiet=False, **kwargs):
     """Run a podman subcommand and return the CompletedProcess.
 
     Returns a CompletedProcess with a non-zero returncode if podman is not
     installed or the command fails. In verbose mode, stdout and stderr are
-    streamed to the terminal in real time while still being captured.
+    streamed to the terminal in real time while still being captured, unless
+    ``quiet`` is set. ``quiet`` is used for commands whose output is parsed
+    programmatically (for example ``inspect --format json``) so their raw output
+    does not flood the terminal.
     """
     command = [_podman_bin(), *args]
     try:
-        if _verbose:
+        if _verbose and not quiet:
             process = subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
@@ -121,7 +125,9 @@ def image_env(image):
 
     Returns a dict mapping variable names to values.
     """
-    result = _run(["image", "inspect", image, "--format", "{{json .Config.Env}}"])
+    result = _run(
+        ["image", "inspect", image, "--format", "{{json .Config.Env}}"], quiet=True
+    )
     if result.returncode != 0:
         return {}
 
@@ -324,7 +330,7 @@ def run_container(
     Git configuration and SSH agent forwarding are no longer handled here;
     add them as ordinary mounts and environment variables in the config file.
 
-    Returns True on success.
+    Returns the podman ``CompletedProcess``; check ``returncode``.
     """
     args = [
         "run",
@@ -391,17 +397,17 @@ def run_container(
     if not entrypoint:
         args.extend(["sleep", "infinity"])
 
-    return _run(args).returncode == 0
+    return _run(args)
 
 
 def start_container(name):
-    """Start a stopped container. Returns True on success."""
-    return _run(["start", name]).returncode == 0
+    """Start a stopped container. Returns the podman ``CompletedProcess``."""
+    return _run(["start", name])
 
 
 def restart_container(name):
-    """Restart a container. Returns True on success."""
-    return _run(["restart", name]).returncode == 0
+    """Restart a container. Returns the podman ``CompletedProcess``."""
+    return _run(["restart", name])
 
 
 def container_id(name):
@@ -418,7 +424,7 @@ def container_mounts(name):
     Each entry is a dict with ``Source`` (host path) and ``Destination``
     (container path), as reported by ``podman container inspect``.
     """
-    result = _run(["container", "inspect", "-f", "{{json .Mounts}}", name])
+    result = _run(["container", "inspect", "-f", "{{json .Mounts}}", name], quiet=True)
     if result.returncode != 0:
         return []
     try:
@@ -541,7 +547,9 @@ def list_containers(all_containers=False):
     """List Cauldron-managed containers.
 
     Returns a list of dictionaries with keys: name, image, status, ports,
-    project_dir. ``ports`` is a list of strings like ``"0.0.0.0:8080->22/tcp"``.
+    host_ports, project_dir. ``ports`` is a list of strings like
+    ``"0.0.0.0:8080->22/tcp"``; ``host_ports`` is the matching list of host
+    ports as integers.
     """
     args = [
         "ps",
@@ -553,7 +561,7 @@ def list_containers(all_containers=False):
     if all_containers:
         args.append("--all")
 
-    result = _run(args)
+    result = _run(args, quiet=True)
     if result.returncode != 0:
         return []
 
@@ -573,6 +581,7 @@ def list_containers(all_containers=False):
             "image": c.get("Image", ""),
             "status": c.get("State", c.get("Status", "")),
             "ports": _format_ports(c.get("Ports") or []),
+            "host_ports": _host_ports(c.get("Ports") or []),
             "project_dir": c.get("Labels", {}).get(PROJECT_LABEL, ""),
         }
         for c in containers
@@ -593,3 +602,52 @@ def _format_ports(ports):
         protocol = p.get("protocol", "tcp")
         formatted.append(f"{host_ip}:{host_port}->{container_port}/{protocol}")
     return formatted
+
+
+def _host_ports(ports):
+    """Return the host ports (ints) for a list of podman ps port mappings."""
+    hosts = []
+    for p in ports:
+        if not isinstance(p, dict):
+            continue
+        host_port = p.get("host_port", p.get("hostPort"))
+        try:
+            hosts.append(int(host_port))
+        except (TypeError, ValueError):
+            continue
+    return hosts
+
+
+_PORT_BIND_ERROR = re.compile(r":(\d+): bind: address already in use")
+
+
+def is_port_in_use_error(stderr):
+    """Return True if ``stderr`` indicates a host port bind failure."""
+    return bool(stderr) and "address already in use" in stderr
+
+
+def port_from_error(stderr):
+    """Return the host port (int) from a port bind failure, or None.
+
+    Matches podman's ``... <addr>:<port>: bind: address already in use``
+    message, capturing the port number.
+    """
+    if not stderr:
+        return None
+    match = _PORT_BIND_ERROR.search(stderr)
+    return int(match.group(1)) if match else None
+
+
+def find_port_owner(host_port):
+    """Return the names of running cauldron containers publishing ``host_port``.
+
+    Only running containers are considered, since only they hold a port on the
+    host. Returns a list of container names (typically zero or one).
+    """
+    if host_port is None:
+        return []
+    try:
+        port = int(host_port)
+    except (TypeError, ValueError):
+        return []
+    return [c["name"] for c in list_containers() if port in c.get("host_ports", [])]

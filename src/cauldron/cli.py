@@ -139,6 +139,38 @@ def _stderr_suffix(result):
     return f"\n{stderr}" if stderr else ""
 
 
+def _port_conflict_hint(result):
+    """Build an extra error line for a container start failure caused by a port
+    already being in use.
+
+    When the podman failure is a host port bind error, identify which other
+    cauldron container (if any) is holding the port. Returns a newline-prefixed
+    hint string, or ``""`` if the failure is not a port conflict.
+    """
+    stderr = getattr(result, "stderr", "") or ""
+    if not podman.is_port_in_use_error(stderr):
+        return ""
+
+    port = podman.port_from_error(stderr)
+    if port is None:
+        return (
+            "\nA host port is already in use. Find what owns it (e.g. "
+            "`ss -tlnp`) or change this project's port in cauldron.toml."
+        )
+
+    owners = podman.find_port_owner(port)
+    if owners:
+        return (
+            f"\nPort {port} is already in use by cauldron container "
+            f"{', '.join(owners)}. Stop or remove that container, or change "
+            "this project's port in cauldron.toml."
+        )
+    return (
+        f"\nPort {port} is already in use, but no cauldron container holds it. "
+        "A non-cauldron process on the host owns the port."
+    )
+
+
 def _recover_template_base(result, base_image, project_dir):
     """Recover from a build failure caused by a Dev Container template image.
 
@@ -234,9 +266,11 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 # Fall through to build and recreate the container.
             else:
                 click.echo(f"Restarting container {container}...")
-                if not podman.restart_container(container):
+                result = podman.restart_container(container)
+                if result.returncode != 0:
                     raise click.ClickException(
                         f"Failed to restart container {container}."
+                        f"{_port_conflict_hint(result)}"
                     )
                 if not podman.container_running(container):
                     raise click.ClickException(
@@ -252,8 +286,12 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             if podman.container_running(container):
                 return
             click.echo(f"Starting existing container {container}...")
-            if not podman.start_container(container):
-                raise click.ClickException(f"Failed to start container {container}.")
+            result = podman.start_container(container)
+            if result.returncode != 0:
+                raise click.ClickException(
+                    f"Failed to start container {container}."
+                    f"{_port_conflict_hint(result)}"
+                )
             if not podman.container_running(container):
                 raise click.ClickException(f"Container {container} did not start.")
             if not _run_lifecycle_hook(container, "post_start", scripts):
@@ -354,7 +392,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     # host paths inherited from the parent, and the target image's defaults
     # (PATH, etc.) are left intact rather than being replaced by the parent's.
     env = config.container_env(cfg)
-    if not podman.run_container(
+    result = podman.run_container(
         name=container,
         image=image,
         workdir=project_dir,
@@ -368,8 +406,11 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         podman_socket=socket_path,
         podman_client=client_path,
         entrypoint=has_entrypoint,
-    ):
-        raise click.ClickException(f"Failed to start container {container}.")
+    )
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"Failed to start container {container}.{_port_conflict_hint(result)}"
+        )
 
     if not podman.container_running(container):
         raise click.ClickException(f"Container {container} did not start.")
