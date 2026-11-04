@@ -433,6 +433,8 @@ def container_mounts(name):
         return []
     if isinstance(mounts, dict):
         mounts = [mounts]
+    if not isinstance(mounts, list):
+        return []
     return mounts
 
 

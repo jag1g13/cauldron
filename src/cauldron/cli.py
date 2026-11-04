@@ -122,6 +122,47 @@ def _run_lifecycle_hook(container, hook, scripts):
     return podman.exec_hook_in_container(container, script_path) == 0
 
 
+def _ensure_runtime_dir(container, uid, gid):
+    """Fix up /run/user/<uid> when a mount target sits under it.
+
+    Podman auto-creates the missing parent directories of a bind mount
+    target as root-owned (0755) when the container is created. When a
+    target is under /run/user/<uid> (e.g. the SSH agent socket
+    passthrough), that directory is the XDG_RUNTIME_DIR fallback for the
+    container user and stays root-owned, so sockets and pid files written
+    there fail with EACCES. Restore the systemd convention of a
+    user-owned 0700 runtime directory.
+
+    The path is only touched when a mount target is strictly under it, so
+    a bind mount of the directory itself is never chowned through to the
+    host filesystem.
+    """
+    runtime_dir = f"/run/user/{uid}"
+    targets = {
+        mount.get("Destination", "") for mount in podman.container_mounts(container)
+    }
+    if runtime_dir in targets:
+        return
+    if not any(target.startswith(runtime_dir + "/") for target in targets):
+        return
+    ok = podman.exec_check(
+        container,
+        [
+            "sh",
+            "-c",
+            f"mkdir -p {runtime_dir} && chown {uid}:{gid} {runtime_dir}"
+            f" && chmod 700 {runtime_dir}",
+        ],
+        user="0",
+    )
+    if not ok:
+        raise click.ClickException(
+            f"Failed to fix ownership of {runtime_dir} in {container}. "
+            f"Repair it with: {podman._podman_bin()} exec -u 0 {container}"
+            f" chown {uid}:{gid} {runtime_dir}"
+        )
+
+
 def _build_ok(result):
     """Return True if a Podman build result indicates success.
 
@@ -276,6 +317,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                     raise click.ClickException(
                         f"Container {container} did not restart."
                     )
+                _ensure_runtime_dir(container, uid, gid)
                 if not _run_lifecycle_hook(container, "post_start", scripts):
                     raise click.ClickException(
                         f"post_start script failed for {container}."
@@ -284,6 +326,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 return
         else:
             if podman.container_running(container):
+                _ensure_runtime_dir(container, uid, gid)
                 return
             click.echo(f"Starting existing container {container}...")
             result = podman.start_container(container)
@@ -294,6 +337,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 )
             if not podman.container_running(container):
                 raise click.ClickException(f"Container {container} did not start.")
+            _ensure_runtime_dir(container, uid, gid)
             if not _run_lifecycle_hook(container, "post_start", scripts):
                 raise click.ClickException(f"post_start script failed for {container}.")
             click.echo(f"Container {container} is running.")
@@ -415,6 +459,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     if not podman.container_running(container):
         raise click.ClickException(f"Container {container} did not start.")
 
+    _ensure_runtime_dir(container, uid, gid)
     if not _run_lifecycle_hook(container, "post_start", scripts):
         raise click.ClickException(f"post_start script failed for {container}.")
 

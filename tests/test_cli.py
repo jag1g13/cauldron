@@ -5,6 +5,8 @@ and control flow without in-process mocks of ``cauldron.podman``. Tests that
 need a live engine live in ``test_cli_integration.py``.
 """
 
+import json
+import os
 import subprocess
 from contextlib import ExitStack
 from unittest.mock import patch
@@ -25,7 +27,17 @@ def containers_exist(fake, returncode=0):
 
 
 def container_is_running(fake, running=True):
-    fake.respond(["container", "inspect"], stdout="true\n" if running else "false\n")
+    fake.respond(
+        ["container", "inspect", "-f", "{{.State.Running}}"],
+        stdout="true\n" if running else "false\n",
+    )
+
+
+def container_mounts_are(fake, mounts):
+    fake.respond(
+        ["container", "inspect", "-f", "{{json .Mounts}}"],
+        stdout=json.dumps(mounts) + "\n",
+    )
 
 
 def build_calls(fake):
@@ -435,7 +447,11 @@ def test_up_run_reports_cauldron_port_owner(fake_podman, monkeypatch, tmp_path):
 def test_exec_start_reports_cauldron_port_owner(fake_podman, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     containers_exist(fake_podman)
-    fake_podman.respond(["container", "inspect"], stdout="false\n", times=1)
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{.State.Running}}"],
+        stdout="false\n",
+        times=1,
+    )
     fake_podman.respond(["start"], returncode=1, stderr=PORT_BIND_STDERR)
     fake_podman.respond(["ps"], stdout=_ps_json([("cauldron-cauldron", 8000)]))
 
@@ -746,7 +762,11 @@ def test_exec_auto_starts_container_when_not_exists(fake_podman, monkeypatch, tm
 def test_exec_starts_container_when_stopped(fake_podman, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     containers_exist(fake_podman)
-    fake_podman.respond(["container", "inspect"], stdout="false\n", times=1)
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{.State.Running}}"],
+        stdout="false\n",
+        times=1,
+    )
     container_is_running(fake_podman)
 
     result = invoke(["exec", "pwd"])
@@ -787,7 +807,11 @@ def test_exec_runs_post_start_when_starting_stopped_container(
     (cauldron_dir / "cauldron.toml").write_text('[scripts]\npost_start = "x.sh"\n')
     monkeypatch.chdir(tmp_path)
     containers_exist(fake_podman)
-    fake_podman.respond(["container", "inspect"], stdout="false\n", times=1)
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{.State.Running}}"],
+        stdout="false\n",
+        times=1,
+    )
     container_is_running(fake_podman)
 
     result = invoke(["exec", "whoami"])
@@ -817,6 +841,145 @@ def test_up_runs_post_start_when_restarting_container(
     exec_calls = [call for call in fake_podman.calls() if call[0] == "exec"]
     assert len(exec_calls) == 1
     assert exec_calls[0][-1] == "/usr/local/share/cauldron/post_start.sh"
+
+
+def _runtime_dir_mounts(uid):
+    """A fake ``.Mounts`` response with a target under /run/user/<uid>."""
+    return [
+        {
+            "Source": f"/run/user/{uid}/keyring/ssh",
+            "Destination": f"/run/user/{uid}/keyring/ssh",
+            "RW": False,
+        }
+    ]
+
+
+def test_up_repairs_runtime_dir_when_mount_under_it(fake_podman, monkeypatch, tmp_path):
+    uid, gid = str(os.getuid()), str(os.getgid())
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text(
+        '[scripts]\npost_start = "post-start.sh"\n'
+    )
+    (cauldron_dir / "post-start.sh").write_text("#!/bin/bash\necho start\n")
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_mounts_are(fake_podman, _runtime_dir_mounts(uid))
+    container_is_running(fake_podman)
+
+    result = invoke(["up"])
+
+    assert result.exit_code == 0
+    calls = fake_podman.calls()
+    repairs = [call for call in calls if call[:3] == ["exec", "-u", "0"]]
+    assert len(repairs) == 1
+    assert repairs[0][-1] == (
+        f"mkdir -p /run/user/{uid} && chown {uid}:{gid} /run/user/{uid}"
+        f" && chmod 700 /run/user/{uid}"
+    )
+    post_start = next(
+        i
+        for i, call in enumerate(calls)
+        if call and call[-1] == "/usr/local/share/cauldron/post_start.sh"
+    )
+    assert calls.index(repairs[0]) < post_start
+
+
+def test_up_no_runtime_dir_repair_for_unrelated_mounts(
+    fake_podman, monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_mounts_are(
+        fake_podman, [{"Source": "/data", "Destination": "/data", "RW": True}]
+    )
+    container_is_running(fake_podman)
+
+    result = invoke(["up"])
+
+    assert result.exit_code == 0
+    assert not any(call[:3] == ["exec", "-u", "0"] for call in fake_podman.calls())
+
+
+def test_up_no_runtime_dir_repair_when_runtime_dir_is_mount_point(
+    fake_podman, monkeypatch, tmp_path
+):
+    uid = str(os.getuid())
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_mounts_are(
+        fake_podman,
+        [
+            {
+                "Source": "/some/data",
+                "Destination": f"/run/user/{uid}",
+                "RW": True,
+            }
+        ],
+    )
+    container_is_running(fake_podman)
+
+    result = invoke(["up"])
+
+    assert result.exit_code == 0
+    assert not any(call[:3] == ["exec", "-u", "0"] for call in fake_podman.calls())
+
+
+def test_up_fails_when_runtime_dir_repair_fails(fake_podman, monkeypatch, tmp_path):
+    uid = str(os.getuid())
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_mounts_are(fake_podman, _runtime_dir_mounts(uid))
+    container_is_running(fake_podman)
+    fake_podman.respond(["exec", "-u", "0"], returncode=1)
+
+    result = invoke(["up"])
+
+    assert result.exit_code != 0
+    assert "Failed to fix ownership" in result.output
+
+
+def test_exec_repairs_runtime_dir_on_running_container(
+    fake_podman, monkeypatch, tmp_path
+):
+    uid = str(os.getuid())
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    container_mounts_are(fake_podman, _runtime_dir_mounts(uid))
+    container_is_running(fake_podman)
+
+    result = invoke(["exec", "pwd"])
+
+    assert result.exit_code == 0
+    calls = fake_podman.calls()
+    assert len([call for call in calls if call[:3] == ["exec", "-u", "0"]]) == 1
+    assert not any(call[0] in ("restart", "start", "run") for call in calls)
+
+
+def test_exec_repairs_runtime_dir_when_starting_stopped_container(
+    fake_podman, monkeypatch, tmp_path
+):
+    uid = str(os.getuid())
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{.State.Running}}"],
+        stdout="false\n",
+        times=1,
+    )
+    container_mounts_are(fake_podman, _runtime_dir_mounts(uid))
+    container_is_running(fake_podman)
+
+    result = invoke(["exec", "pwd"])
+
+    assert result.exit_code == 0
+    calls = fake_podman.calls()
+    assert any(call[0] == "start" for call in calls)
+    assert len([call for call in calls if call[:3] == ["exec", "-u", "0"]]) == 1
 
 
 def test_up_passes_entrypoint_flag_when_entrypoint_configured(

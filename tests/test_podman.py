@@ -517,6 +517,14 @@ def test_container_mounts_empty_on_failure(fake_podman):
     assert podman.container_mounts("cauldron-foo") == []
 
 
+def test_container_mounts_empty_on_scalar_json(fake_podman):
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{json .Mounts}}", "cauldron-foo"],
+        stdout="true\n",
+    )
+    assert podman.container_mounts("cauldron-foo") == []
+
+
 def test_stop_container_runs_podman_stop(fake_podman):
     assert podman.stop_container("cauldron-foo") is True
     assert fake_podman.calls() == [["stop", "cauldron-foo"]]
