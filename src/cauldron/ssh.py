@@ -2,6 +2,7 @@
 
 import pathlib
 import re
+import shlex
 import shutil
 import subprocess
 
@@ -112,7 +113,7 @@ def _build_host_block(container):
         "    IdentitiesOnly yes\n"
         "    StrictHostKeyChecking no\n"
         "    UserKnownHostsFile /dev/null\n"
-        f"    ProxyCommand {podman._podman_bin()} exec -u 0 -i {container}"
+        f"    ProxyCommand {shlex.quote(podman._podman_bin())} exec -u 0 -i {container}"
         " /usr/sbin/sshd -i"
         " -o UsePAM=no -o PasswordAuthentication=no\n"
     )
