@@ -17,6 +17,7 @@
 
 [container]
 # base_image = "docker.io/astral/uv:python3.14-trixie"
+# podman_socket = true  # use the host's Podman service (shares images and build cache)
 
 # mounts = [
 #   {source = "$HOME/.gitconfig", target = "/home/cauldron/.gitconfig", options = "ro,Z"},

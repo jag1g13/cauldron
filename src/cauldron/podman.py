@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -12,6 +13,8 @@ from cauldron.project import DEFAULT_CONTAINER_PREFIX
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
+PODMAN_CLIENT_PATH = "/usr/local/bin/cauldron-podman"
+PODMAN_ALIAS_PATH = "/usr/local/bin/podman"
 
 _verbose = False
 
@@ -20,6 +23,15 @@ def set_verbose(verbose):
     """Enable or disable verbose mode for podman subcommands."""
     global _verbose
     _verbose = verbose
+
+
+def _podman_bin():
+    """Return the Podman executable to invoke.
+
+    ``CAULDRON_PODMAN_PATH`` lets a container use a mounted static client that
+    talks to the host's Podman service instead of a locally installed Podman.
+    """
+    return os.environ.get("CAULDRON_PODMAN_PATH", "podman")
 
 
 def _stream_pipe(pipe, lines, file):
@@ -37,7 +49,7 @@ def _run(args, **kwargs):
     installed or the command fails. In verbose mode, stdout and stderr are
     streamed to the terminal in real time while still being captured.
     """
-    command = ["podman", *args]
+    command = [_podman_bin(), *args]
     try:
         if _verbose:
             process = subprocess.Popen(
@@ -287,6 +299,8 @@ def run_container(
     mounts=None,
     ports=None,
     known_hosts=None,
+    podman_socket=None,
+    podman_client=None,
     entrypoint=False,
 ):
     """Create and start a detached container with the standard mounts.
@@ -298,6 +312,10 @@ def run_container(
     ``ports`` is a list of strings in Podman's ``-p`` syntax.
     ``known_hosts`` is a list of strings in ``hostname:ip`` format, passed to
     Podman's ``--add-host`` flag.
+    ``podman_socket`` and ``podman_client`` mount the host's Podman socket and
+    a matching static Podman client into the container, and point the container
+    at the host service through ``CONTAINER_HOST``. This lets the container use
+    the host's images and build cache without nested Podman.
 
     When ``entrypoint`` is True, the image's configured entrypoint is used and
     no default ``sleep infinity`` command is appended. This is used when the
@@ -327,6 +345,21 @@ def run_container(
 
     args.extend(["-e", f"HOME={CONTAINER_HOME}"])
 
+    podman_socket_url = None
+    if podman_socket and podman_client:
+        socket_dir = pathlib.Path(podman_socket).parent
+        socket_name = pathlib.Path(podman_socket).name
+        podman_socket_url = f"unix:///run/podman-host/{socket_name}"
+        # The host socket is not relabelled for the container's security
+        # context, so connecting to it fails under SELinux unless labelling is
+        # disabled (as the podman-system-service documentation requires).
+        args.extend(["--security-opt", "label=disable"])
+        args.extend(["-v", f"{socket_dir}:/run/podman-host"])
+        args.extend(["-v", f"{podman_client}:{PODMAN_CLIENT_PATH}:ro"])
+        # Also expose the client as `podman` on PATH so the documented
+        # `podman build` workflow uses the matching client, not the image's.
+        args.extend(["-v", f"{podman_client}:{PODMAN_ALIAS_PATH}:ro"])
+
     selinux = _selinux_enabled()
     for mount in mounts or []:
         spec = _format_mount_spec(mount)
@@ -344,6 +377,9 @@ def run_container(
         args.extend(["--add-host", entry])
 
     env = env or {}
+    if podman_socket_url:
+        env["CONTAINER_HOST"] = podman_socket_url
+        env["CAULDRON_PODMAN_PATH"] = PODMAN_CLIENT_PATH
     if "PATH" in env and "${PATH}" in env["PATH"]:
         image_path = image_env(image).get("PATH", "")
         env["PATH"] = env["PATH"].replace("${PATH}", image_path)
@@ -376,6 +412,24 @@ def container_id(name):
     return result.stdout.strip()
 
 
+def container_mounts(name):
+    """Return the mount list for a container, or an empty list if unreadable.
+
+    Each entry is a dict with ``Source`` (host path) and ``Destination``
+    (container path), as reported by ``podman container inspect``.
+    """
+    result = _run(["container", "inspect", "-f", "{{json .Mounts}}", name])
+    if result.returncode != 0:
+        return []
+    try:
+        mounts = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    if isinstance(mounts, dict):
+        mounts = [mounts]
+    return mounts
+
+
 def stop_container(name):
     """Stop a running container. Returns True on success."""
     return _run(["stop", name]).returncode == 0
@@ -395,7 +449,7 @@ def exec_in_container(name, command, args=None, interactive=False, tty=False):
 
     Returns the command's exit code.
     """
-    cmd = ["podman", "exec"]
+    cmd = [_podman_bin(), "exec"]
     if interactive:
         cmd.append("-i")
     if tty:
@@ -420,7 +474,7 @@ def exec_hook_in_container(name, command):
 
     Returns the command's exit code.
     """
-    cmd = ["podman", "exec", name, command]
+    cmd = [_podman_bin(), "exec", name, command]
     try:
         if _verbose:
             return subprocess.run(cmd).returncode
@@ -435,7 +489,7 @@ def exec_check(name, command, user=None):
     ``command`` is a list of arguments. ``user`` optionally overrides the
     container user (e.g. ``"0"`` for root).
     """
-    args = ["podman", "exec"]
+    args = [_podman_bin(), "exec"]
     if user:
         args.extend(["-u", user])
     args.append(name)
@@ -448,7 +502,7 @@ def exec_check(name, command, user=None):
 
 def exec_capture(name, command, user=None):
     """Run a command in a container and return stdout, or None on failure."""
-    args = ["podman", "exec"]
+    args = [_podman_bin(), "exec"]
     if user:
         args.extend(["-u", user])
     args.append(name)
@@ -462,7 +516,7 @@ def exec_capture(name, command, user=None):
 
 def exec_with_stdin(name, command, input_text, user=None):
     """Run a command in a container, feeding stdin. Returns True on success."""
-    args = ["podman", "exec", "-i"]
+    args = [_podman_bin(), "exec", "-i"]
     if user:
         args.extend(["-u", user])
     args.append(name)
@@ -486,7 +540,8 @@ def remove_container(name, force=False):
 def list_containers(all_containers=False):
     """List Cauldron-managed containers.
 
-    Returns a list of dictionaries with keys: name, image, status, project_dir.
+    Returns a list of dictionaries with keys: name, image, status, ports,
+    project_dir. ``ports`` is a list of strings like ``"0.0.0.0:8080->22/tcp"``.
     """
     args = [
         "ps",
@@ -517,7 +572,24 @@ def list_containers(all_containers=False):
             else c.get("Names", ""),
             "image": c.get("Image", ""),
             "status": c.get("State", c.get("Status", "")),
+            "ports": _format_ports(c.get("Ports") or []),
             "project_dir": c.get("Labels", {}).get(PROJECT_LABEL, ""),
         }
         for c in containers
     ]
+
+
+def _format_ports(ports):
+    """Render podman ps port mappings as strings like '0.0.0.0:8080->22/tcp'."""
+    formatted = []
+    for p in ports:
+        if not isinstance(p, dict):
+            continue
+        container_port = p.get("container_port", p.get("containerPort"))
+        host_port = p.get("host_port", p.get("hostPort"))
+        if container_port is None or host_port is None:
+            continue
+        host_ip = p.get("host_ip", p.get("hostIp")) or "0.0.0.0"
+        protocol = p.get("protocol", "tcp")
+        formatted.append(f"{host_ip}:{host_port}->{container_port}/{protocol}")
+    return formatted

@@ -1,6 +1,7 @@
+import shlex
 from unittest.mock import patch, MagicMock
 
-from cauldron import ssh
+from cauldron import podman, ssh
 
 
 def test_ensure_keypair_skips_when_keys_exist(tmp_path):
@@ -119,12 +120,23 @@ def test_build_remote_uri_format():
     assert "Host cauldron-foo" in uri
     assert "User cauldron" in uri
     assert "IdentityFile ~/.config/cauldron/ssh/id_ed25519" in uri
-    assert "ProxyCommand podman exec -u 0 -i cauldron-foo" in uri
+    assert (
+        f"ProxyCommand {shlex.quote(podman._podman_bin())} exec -u 0 -i cauldron-foo"
+        in uri
+    )
     assert "/usr/sbin/sshd -i" in uri
     assert "UsePAM=no" in uri
     assert "PasswordAuthentication=no" in uri
     assert "StrictHostKeyChecking no" in uri
     assert "UserKnownHostsFile /dev/null" in uri
+
+
+def test_build_remote_uri_quotes_podman_path_with_spaces(monkeypatch):
+    monkeypatch.setenv("CAULDRON_PODMAN_PATH", "/opt/podman tools/podman")
+    uri = ssh._build_host_block("cauldron-foo")
+    # A path with spaces must be shell-quoted so ProxyCommand (run via a shell)
+    # does not split it.
+    assert "ProxyCommand '/opt/podman tools/podman' exec -u 0 -i cauldron-foo" in uri
 
 
 def test_ensure_ssh_config_creates_config(tmp_path):

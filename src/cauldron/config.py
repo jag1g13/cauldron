@@ -315,6 +315,16 @@ def container_known_hosts(config):
     return list(config.get("container", {}).get("known_hosts", []))
 
 
+def container_podman_socket(config):
+    """Return whether to use the host's Podman service via its socket.
+
+    When enabled, the host Podman socket and a matching static Podman client
+    are mounted into the container, so builds and containers use the host's
+    image and build cache directly.
+    """
+    return config.get("container", {}).get("podman_socket", False)
+
+
 def container_scripts(config):
     """Return lifecycle scripts from config.
 

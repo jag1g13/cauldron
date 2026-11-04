@@ -427,6 +427,16 @@ def test_set_base_image_preserves_other_keys(tmp_path, monkeypatch):
     assert "5.0-24" in content
 
 
+def test_container_podman_socket_returns_configured_value():
+    assert (
+        config.container_podman_socket({"container": {"podman_socket": True}}) is True
+    )
+
+
+def test_container_podman_socket_returns_false_when_missing():
+    assert config.container_podman_socket({}) is False
+
+
 def test_container_scripts_returns_configured_scripts():
     cfg = {
         "scripts": {

@@ -24,6 +24,37 @@ base_image = "astral/uv:python3.14-trixie"
 
 Use a pre-built container image, not a Dev Container *template*. Templates (e.g. `ghcr.io/devcontainers/templates/...`) are OCI artifacts whose layers use a media type that Podman cannot build from, so `podman build` fails with `Unknown media type during manifest conversion`. The equivalent pre-built images live at `mcr.microsoft.com/devcontainers/...` (see <https://github.com/devcontainers/images>) and build correctly. When Cauldron detects this failure, it offers to rewrite `base_image` to the matching pre-built image and retry the build.
 
+#### `podman_socket`
+
+Use the host's Podman service from inside the container through its socket. The
+default is `false`.
+
+```toml
+[container]
+podman_socket = true
+```
+
+When enabled, Cauldron reads the host's Podman version, downloads a matching
+static `podman-remote` client (checksum-verified and cached under
+`~/.cache/cauldron/podman-remote/<version>`), mounts it and the host's rootless
+socket into the container, and sets `CONTAINER_HOST`. Podman commands in the
+container then operate on the host's Podman, sharing images and build cache.
+
+ The host must expose its socket, for example with
+ `systemctl --user enable --now podman.socket`. Containers created from inside
+ the container are siblings on the host rather than children of the project
+ container, so the project directory must also exist on the host at the same
+ absolute path; projects that live only inside the container cannot be
+ bind-mounted. `cauldron up` can itself be run from inside such a container; it
+ reuses the host socket, client, mounts, and environment already set on the
+ current container for the new sibling, so `source`/`env` values like `$HOME`
+ and `$SSH_AUTH_SOCK` resolve to the same host resources as before rather than
+ re-expanding to paths inside the container.
+
+This grants the container full control of the host user's rootless Podman, so
+only enable it where that is acceptable. See
+`docs/spec/features/FEAT03-podman-remote.md` for the full design.
+
 #### `mounts`
 
 Mount additional files or directories into the container. Each entry can be either an inline table or a Docker short-syntax string.
