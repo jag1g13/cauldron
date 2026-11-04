@@ -849,6 +849,7 @@ def _runtime_dir_mounts(uid):
         {
             "Source": f"/run/user/{uid}/keyring/ssh",
             "Destination": f"/run/user/{uid}/keyring/ssh",
+            "Type": "bind",
             "RW": False,
         }
     ]
@@ -916,6 +917,7 @@ def test_up_no_runtime_dir_repair_when_runtime_dir_is_mount_point(
             {
                 "Source": "/some/data",
                 "Destination": f"/run/user/{uid}",
+                "Type": "bind",
                 "RW": True,
             }
         ],
@@ -926,6 +928,57 @@ def test_up_no_runtime_dir_repair_when_runtime_dir_is_mount_point(
 
     assert result.exit_code == 0
     assert not any(call[:3] == ["exec", "-u", "0"] for call in fake_podman.calls())
+
+
+def test_up_no_runtime_dir_repair_when_ancestor_mounts_runtime_dir(
+    fake_podman, monkeypatch, tmp_path
+):
+    uid = str(os.getuid())
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_mounts_are(
+        fake_podman,
+        [
+            {
+                "Source": "/some/data",
+                "Destination": "/run/user",
+                "Type": "bind",
+                "RW": True,
+            },
+            *(_runtime_dir_mounts(uid)),
+        ],
+    )
+    container_is_running(fake_podman)
+
+    result = invoke(["up"])
+
+    assert result.exit_code == 0
+    assert not any(call[:3] == ["exec", "-u", "0"] for call in fake_podman.calls())
+
+
+def test_up_repairs_runtime_dir_beneath_tmpfs_ancestor(
+    fake_podman, monkeypatch, tmp_path
+):
+    uid, gid = str(os.getuid()), str(os.getgid())
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_mounts_are(
+        fake_podman,
+        [
+            {"Source": "tmpfs", "Destination": "/run", "Type": "tmpfs"},
+            *(_runtime_dir_mounts(uid)),
+        ],
+    )
+    container_is_running(fake_podman)
+
+    result = invoke(["up"])
+
+    assert result.exit_code == 0
+    repairs = [call for call in fake_podman.calls() if call[:3] == ["exec", "-u", "0"]]
+    assert len(repairs) == 1
+    assert f"chown {uid}:{gid} /run/user/{uid}" in repairs[0][-1]
 
 
 def test_up_fails_when_runtime_dir_repair_fails(fake_podman, monkeypatch, tmp_path):

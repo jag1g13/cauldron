@@ -133,17 +133,22 @@ def _ensure_runtime_dir(container, uid, gid):
     there fail with EACCES. Restore the systemd convention of a
     user-owned 0700 runtime directory.
 
-    The path is only touched when a mount target is strictly under it, so
-    a bind mount of the directory itself is never chowned through to the
-    host filesystem.
+    The repair is skipped when the directory itself or any of its
+    ancestors is a mount point other than a container-local tmpfs:
+    chown/chmod through a bind or volume mount would change the host
+    filesystem, or fail on a read-only mount.
     """
     runtime_dir = f"/run/user/{uid}"
-    targets = {
-        mount.get("Destination", "") for mount in podman.container_mounts(container)
-    }
-    if runtime_dir in targets:
-        return
-    if not any(target.startswith(runtime_dir + "/") for target in targets):
+    mounts = podman.container_mounts(container)
+    for mount in mounts:
+        destination = mount.get("Destination", "")
+        if runtime_dir != destination and not runtime_dir.startswith(destination + "/"):
+            continue
+        if mount.get("Type", "") != "tmpfs":
+            return
+    if not any(
+        mount.get("Destination", "").startswith(runtime_dir + "/") for mount in mounts
+    ):
         return
     ok = podman.exec_check(
         container,

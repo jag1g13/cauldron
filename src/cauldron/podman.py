@@ -421,8 +421,9 @@ def container_id(name):
 def container_mounts(name):
     """Return the mount list for a container, or an empty list if unreadable.
 
-    Each entry is a dict with ``Source`` (host path) and ``Destination``
-    (container path), as reported by ``podman container inspect``.
+    Each entry is a dict with ``Source`` (host path), ``Destination``
+    (container path) and ``Type`` (e.g. ``bind``, ``tmpfs``, ``volume``),
+    as reported by ``podman container inspect``.
     """
     result = _run(["container", "inspect", "-f", "{{json .Mounts}}", name], quiet=True)
     if result.returncode != 0:

@@ -137,7 +137,7 @@ SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
 
 `cauldron init` writes a reference `.cauldron/cauldron.toml` with commented examples for these mounts. Uncomment them to enable passthrough.
 
-When a mount target sits under `/run/user/<uid>` (the usual location of `$SSH_AUTH_SOCK`), Podman auto-creates the missing parent directories as root-owned when the container is created. That leaves the container user's `XDG_RUNTIME_DIR` unwritable, so anything writing a socket or pid file there fails with `EACCES`. Cauldron detects this on every start or exec and restores `/run/user/<uid>` to a user-owned `0700` directory. A mount whose target is exactly `/run/user/<uid>` is a bind mount point and is left untouched.
+When a mount target sits under `/run/user/<uid>` (the usual location of `$SSH_AUTH_SOCK`), Podman auto-creates the missing parent directories as root-owned when the container is created. That leaves the container user's `XDG_RUNTIME_DIR` unwritable, so anything writing a socket or pid file there fails with `EACCES`. Cauldron detects this on every start or exec and restores `/run/user/<uid>` to a user-owned `0700` directory. The repair is skipped when `/run/user/<uid>` itself or any ancestor of it is a mount point other than a container-local tmpfs (for example a bind or volume mount at `/run/user`), since chown/chmod through such a mount would change the host filesystem or fail on a read-only mount.
 
 ### `[env]` — environment variables
 
