@@ -176,6 +176,8 @@ mounts = [
 SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
 ```
 
+When a mount target sits under `/run/user/<uid>` (the usual location of `$SSH_AUTH_SOCK`), Podman auto-creates the missing parent directories as root-owned when the container is created. That leaves the container user's `XDG_RUNTIME_DIR` unwritable. Cauldron detects this on every start and restores `/run/user/<uid>` to a user-owned `0700` directory, unless the directory (or an ancestor of it) is a mount point other than a container-local tmpfs, in which case the host-backed mount is left untouched.
+
 ## Testing
 
 ```bash
