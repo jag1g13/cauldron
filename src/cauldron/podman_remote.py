@@ -15,6 +15,7 @@ import platform
 import re
 import shutil
 import socket
+import tempfile
 import subprocess
 import tarfile
 import urllib.error
@@ -165,27 +166,35 @@ def ensure_client(version=None, arch=None):
     directory.mkdir(parents=True, exist_ok=True)
     checksums = _fetch_checksums(version)
 
-    last_error = None
-    for asset in _asset_names(version, arch):
-        archive = directory / asset
-        try:
-            _download(_asset_url(version, asset), archive)
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            continue
-        _verify(archive, checksums.get(asset))
-        with tarfile.open(archive) as tar:
-            tar.extractall(directory, filter="data")
-        archive.unlink()
-        found = _find_binary(directory)
-        found.chmod(0o755)
-        if found != binary:
-            shutil.move(str(found), str(binary))
-        return binary
+    # Download and extract into an isolated staging directory so concurrent
+    # first-time installs never truncate or remove each other's downloads, and
+    # readers never observe a partially extracted client. The finished binary is
+    # published atomically with os.replace, so a cache reader only ever sees a
+    # complete install or none at all.
+    staging = pathlib.Path(tempfile.mkdtemp(dir=directory, prefix=".staging-"))
+    try:
+        last_error = None
+        for asset in _asset_names(version, arch):
+            archive = staging / asset
+            try:
+                _download(_asset_url(version, asset), archive)
+            except urllib.error.HTTPError as exc:
+                last_error = exc
+                continue
+            _verify(archive, checksums.get(asset))
+            with tarfile.open(archive) as tar:
+                tar.extractall(staging, filter="data")
+            archive.unlink()
+            found = _find_binary(staging)
+            found.chmod(0o755)
+            os.replace(str(found), str(binary))
+            return binary
 
-    raise RemoteError(
-        f"No static podman-remote binary found for Podman {version} ({arch})."
-    ) from last_error
+        raise RemoteError(
+            f"No static podman-remote binary found for Podman {version} ({arch})."
+        ) from last_error
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def socket_path():
