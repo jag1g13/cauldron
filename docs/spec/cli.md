@@ -43,6 +43,14 @@ Then it verifies that the environment is ready to use Cauldron:
 
 If any step fails, the command exits with a non-zero status and prints the failure reason.
 
+With the `smolvm` backend, `check` also verifies — right after confirming the
+`smolvm` binary is installed, and before the image steps — that the KVM device
+(`/dev/kvm`) exists and is writable by this user, since microVMs cannot start
+without it. On failure it prints how to grant access: add this user to the host's
+`kvm` group, or grant a named ACL (`sudo setfacl -m u:<uid>:rw /dev/kvm`).
+Group permissions do not cross container user namespaces, so inside a cauldron
+only the ACL form works.
+
 When `podman_socket` is enabled, `check` additionally verifies the host's Podman
 socket. This step only warns (and does not fail the check) if the socket is not
 available, since `podman_socket` is optional; it is skipped entirely when

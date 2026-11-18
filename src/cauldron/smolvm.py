@@ -31,6 +31,7 @@ from cauldron.project import DEFAULT_CONTAINER_PREFIX
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
 CONTAINER_HOME = "/home/cauldron"
 PROJECT_LABEL = "cauldron.project_dir"
+KVM_DEVICE = "/dev/kvm"
 
 _verbose = False
 
@@ -202,6 +203,36 @@ def _image_default_path(tag):
 def version():
     """Return True if ``smolvm --version`` succeeds."""
     return _smolvm(["--version"]).returncode == 0
+
+
+def _path_writable(path):
+    """Return True if this user can write ``path`` (ACL-aware check)."""
+    return os.access(path, os.W_OK)
+
+
+def kvm_check():
+    """Verify that smolvm can use the KVM device on this machine.
+
+    Returns ``(ok, hint)``. ``ok`` is False when the KVM device is missing or
+    not writable by this user — microVMs cannot start in that case — and
+    ``hint`` explains how to grant access.
+    """
+    if not os.path.exists(KVM_DEVICE):
+        return (
+            False,
+            f"{KVM_DEVICE} is missing. The smolvm backend needs KVM: "
+            "enable hardware virtualization in BIOS/UEFI and load the kvm module.",
+        )
+    if not _path_writable(KVM_DEVICE):
+        return (
+            False,
+            f"{KVM_DEVICE} is not writable by this user, so smolvm cannot "
+            "start microVMs. On the host, add this user to the kvm group, or "
+            f"grant a named ACL: `sudo setfacl -m u:{os.getuid()}:rw "
+            f"{KVM_DEVICE}`. Inside a container, group membership does not "
+            "cross user namespaces — use the setfacl form instead.",
+        )
+    return True, ""
 
 
 def image_exists(tag):

@@ -48,7 +48,11 @@ type = "smolvm"
 ```
 
 This requires the `smolvm` binary on your `PATH` (override its location with
-`CAULDRON_SMOLVM_PATH`) and a host with KVM. The project image is still built
+`CAULDRON_SMOLVM_PATH`) and a host with KVM: `cauldron check` verifies the
+device is writable by your user and prints a remedy when it is not (inside
+containers, only a named ACL such as
+`sudo setfacl -m u:<uid>:rw /dev/kvm` crosses the user namespace; host `kvm`
+group membership does not). The project image is still built
 with your host builder (`podman` or `docker`) and handed to smolvm as a
 `docker save` tar, so custom Dockerfiles and the `CAULDRON_BASE` build argument
 work the same way. Podman-only options such as `podman_socket` are ignored under

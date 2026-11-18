@@ -334,6 +334,44 @@ def test_check_warns_but_passes_when_socket_unavailable(
     assert "All checks passed." in result.output
 
 
+def test_check_verifies_kvm_access_for_smolvm_backend(
+    fake_smolvm, monkeypatch, tmp_path
+):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvm"\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cauldron.smolvm.KVM_DEVICE", "/dev/null")
+    monkeypatch.setattr("cauldron.smolvm.ensure_base_image", lambda base=None: True)
+    monkeypatch.setattr("cauldron.smolvm.run_test_container", lambda base=None: True)
+
+    result = invoke(["check"])
+
+    assert result.exit_code == 0
+    assert "Checking KVM device is available and writable... ok" in result.output
+    assert "All checks passed." in result.output
+
+
+def test_check_reports_kvm_permission_hint_for_smolvm_backend(
+    fake_smolvm, monkeypatch, tmp_path
+):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvm"\n')
+    monkeypatch.chdir(tmp_path)
+    device = tmp_path / "kvm"
+    device.write_text("")
+    monkeypatch.setattr("cauldron.smolvm.KVM_DEVICE", str(device))
+    monkeypatch.setattr("cauldron.smolvm._path_writable", lambda path: False)
+    monkeypatch.setattr("cauldron.smolvm.ensure_base_image", lambda base=None: True)
+
+    result = invoke(["check"])
+
+    assert result.exit_code != 0
+    assert "Checking KVM device is available and writable... failed" in result.output
+    assert f"sudo setfacl -m u:{os.getuid()}:rw {device}" in result.output
+
+
 def test_up_rejects_conflicting_build_flags():
     result = invoke(["up", "--build", "--no-build"])
     assert result.exit_code != 0

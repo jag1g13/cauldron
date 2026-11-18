@@ -54,6 +54,30 @@ def test_version_false_when_smolvm_fails(fake_smolvm):
     assert smolvm.version() is False
 
 
+def test_kvm_check_passes_when_device_is_writable(monkeypatch):
+    monkeypatch.setattr(smolvm, "KVM_DEVICE", "/dev/null")
+    assert smolvm.kvm_check() == (True, "")
+
+
+def test_kvm_check_reports_missing_device(monkeypatch, tmp_path):
+    monkeypatch.setattr(smolvm, "KVM_DEVICE", str(tmp_path / "absent-kvm"))
+    ok, hint = smolvm.kvm_check()
+    assert ok is False
+    assert f"{tmp_path / 'absent-kvm'} is missing" in hint
+    assert "KVM" in hint
+
+
+def test_kvm_check_reports_unwritable_device(monkeypatch, tmp_path):
+    device = tmp_path / "kvm"
+    device.write_text("")
+    monkeypatch.setattr(smolvm, "KVM_DEVICE", str(device))
+    monkeypatch.setattr(smolvm, "_path_writable", lambda path: False)
+    ok, hint = smolvm.kvm_check()
+    assert ok is False
+    assert f"sudo setfacl -m u:{os.getuid()}:rw {device}" in hint
+    assert "user namespaces" in hint
+
+
 def test_image_tar_path_uses_override_dir_and_sanitizes(tmp_path, monkeypatch):
     monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "tar"))
     path = smolvm.image_tar_path("docker.io/library/debian:trixie-slim")

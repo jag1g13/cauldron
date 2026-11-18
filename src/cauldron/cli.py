@@ -40,19 +40,23 @@ def check():
         else:
             click.echo("Not running inside a cauldron.")
 
-    steps = [
-        (f"{backend_name} is installed", rt.version),
+    steps = [(f"{backend_name} is installed", rt.version)]
+    if backend_name == "smolvm":
+        steps.append(("KVM device is available and writable", rt.kvm_check))
+    steps += [
         ("base image is available", lambda: rt.ensure_base_image(base_image)),
         ("test environment can run", lambda: rt.run_test_container(base_image)),
     ]
 
     for description, step in steps:
         click.echo(f"Checking {description}... ", nl=False)
-        if step():
+        outcome = step()
+        ok, hint = outcome if isinstance(outcome, tuple) else (outcome, "")
+        if ok:
             click.echo("ok")
         else:
             click.echo("failed")
-            raise click.ClickException(f"Check failed: {description}")
+            raise click.ClickException(hint or f"Check failed: {description}")
 
     if backend_name == "podman" and podman_socket:
         click.echo("Checking host Podman socket... ", nl=False)
