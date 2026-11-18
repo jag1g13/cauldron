@@ -541,6 +541,31 @@ def test_up_skips_build_when_image_exists(fake_podman, monkeypatch, tmp_path):
     assert build_calls(fake_podman) == []
 
 
+def test_up_sets_up_remote_ssh(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    container_is_running(fake_podman)
+
+    with patch("cauldron.ssh.ensure_remote_ssh") as mock_ssh:
+        result = invoke(["up"])
+
+    assert result.exit_code == 0
+    mock_ssh.assert_called_once()
+    assert mock_ssh.call_args.args[0].startswith("cauldron-")
+
+
+def test_up_succeeds_when_remote_ssh_fails(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    container_is_running(fake_podman)
+
+    with patch("cauldron.ssh.ensure_remote_ssh", side_effect=ssh.SSHError("boom")):
+        result = invoke(["up"])
+
+    assert result.exit_code == 0
+    assert "Remote-SSH setup skipped" in result.output
+
+
 def test_up_builds_intermediate_when_dockerfile_exists(
     fake_podman, monkeypatch, tmp_path
 ):
@@ -1281,12 +1306,10 @@ def test_code_fails_when_ssh_setup_errors(fake_podman, monkeypatch, tmp_path):
 
     with (
         patch("cauldron.vscode.code_available", return_value=True),
-        patch("cauldron.ssh.ensure_keypair"),
         patch(
-            "cauldron.ssh.ensure_container_ssh",
+            "cauldron.ssh.ensure_remote_ssh",
             side_effect=ssh.SSHError("test error"),
         ),
-        patch("cauldron.ssh.ensure_ssh_config"),
     ):
         result = invoke(["code"])
 

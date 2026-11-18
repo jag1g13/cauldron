@@ -135,6 +135,15 @@ def ensure_ssh_config(container):
     _ensure_include_in_user_config()
 
 
+def ensure_remote_ssh(container):
+    """Set up Remote-SSH for a container: host key pair, in-container sshd, and
+    the SSH config. Idempotent. Raises SSHError if any step fails.
+    """
+    ensure_keypair()
+    ensure_container_ssh(container)
+    ensure_ssh_config(container)
+
+
 def _update_managed_file(path, begin_marker, end_marker, content):
     """Insert or replace a marked block in a file."""
     existing = ""

@@ -489,10 +489,21 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     "--no-build", is_flag=True, help="Never build; fail if the image is missing."
 )
 def up(name, build, no_build):
-    """Start or restart the project's container, building the image if needed."""
+    """Start or restart the project's container, building the image if needed.
+
+    Also sets up Remote-SSH (host key pair, in-container sshd and the SSH
+    config) so the container is reachable via `ssh` without VSCode. Setup is
+    best-effort: a failure is reported but does not prevent the container from
+    starting.
+    """
     container = project.container_name(override=name)
 
     _start_project_container(container, build=build, no_build=no_build, restart=True)
+
+    try:
+        ssh.ensure_remote_ssh(container)
+    except ssh.SSHError as exc:
+        click.echo(f"warning: Remote-SSH setup skipped: {exc}")
 
 
 @cli.command()
@@ -621,9 +632,7 @@ def code(name):
         )
 
     try:
-        ssh.ensure_keypair()
-        ssh.ensure_container_ssh(container)
-        ssh.ensure_ssh_config(container)
+        ssh.ensure_remote_ssh(container)
     except ssh.SSHError as exc:
         raise click.ClickException(str(exc)) from exc
 

@@ -10,10 +10,11 @@ import json
 import pathlib
 import sys
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 
-from cauldron import backend, config, podman, project
+from cauldron import backend, config, podman, project, ssh
 
 FAKE_PODMAN = pathlib.Path(__file__).parent / "fake_podman.py"
 FAKE_SMOLVM = pathlib.Path(__file__).parent / "fake_smolvm.py"
@@ -101,6 +102,17 @@ def isolate_user_config(tmp_path, monkeypatch):
     monkeypatch.setattr(
         project, "DOCKERFILE_GLOBAL_PATH", tmp_path / "global.Dockerfile"
     )
+
+
+@pytest.fixture(autouse=True)
+def stub_remote_ssh(monkeypatch):
+    """Stop ``up``/``code`` from performing real Remote-SSH setup in tests.
+
+    The wrapper is replaced with a no-op so no key generation, in-container
+    exec, or SSH config writes happen. Tests that exercise the setup patch
+    ``ssh.ensure_remote_ssh`` (or the inner functions) explicitly.
+    """
+    monkeypatch.setattr(ssh, "ensure_remote_ssh", MagicMock())
 
 
 @pytest.fixture(scope="session")
