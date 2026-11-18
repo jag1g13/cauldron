@@ -15,6 +15,7 @@ command succeeds with empty output.
 
 import json
 import os
+import pathlib
 import sys
 
 
@@ -31,6 +32,19 @@ def _matches(rule, argv):
     if prefix is None:
         return True
     return argv[: len(prefix)] == list(prefix)
+
+
+def _write_output(argv):
+    """Create the file named after ``-o`` to model a successful export."""
+    for index, arg in enumerate(argv):
+        if arg == "-o" and index + 1 < len(argv):
+            path = pathlib.Path(argv[index + 1])
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fake-image-archive")
+            except OSError:
+                pass
+            return
 
 
 def main():
@@ -65,10 +79,14 @@ def main():
                 except OSError:
                     pass
 
+        returncode = rule.get("returncode", 0)
+        if returncode == 0:
+            _write_output(argv)
         sys.stdout.write(rule.get("stdout", ""))
         sys.stderr.write(rule.get("stderr", ""))
-        return rule.get("returncode", 0)
+        return returncode
 
+    _write_output(argv)
     return 0
 
 

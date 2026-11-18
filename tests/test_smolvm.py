@@ -134,6 +134,32 @@ def test_build_project_image_builds_and_saves_tar(fake_smolvm, monkeypatch):
     assert save_calls[0][1] == "-o"
     assert save_calls[0][-1] == "cauldron-foo:latest"
 
+    final = smolvm.image_tar_path("cauldron-foo:latest")
+    tmp = final.with_name(f"{final.name}.tmp")
+    # The export targets a fresh sibling that is then renamed into place.
+    assert save_calls[0][2] == str(tmp)
+    assert final.exists()
+    assert not tmp.exists()
+
+
+def test_build_project_image_overwrites_stale_tar(fake_smolvm, monkeypatch):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    fake_smolvm.respond(["build"], returncode=0)
+    fake_smolvm.respond(["save"], returncode=0)
+
+    final = smolvm.image_tar_path("cauldron-foo:latest")
+    final.parent.mkdir(parents=True, exist_ok=True)
+    final.write_bytes(b"stale-archive")
+
+    result = smolvm.build_project_image(
+        "cauldron-foo:latest", 1000, 1000, base_image="base:img"
+    )
+    assert result.returncode == 0
+    assert final.read_bytes() == b"fake-image-archive"
+    assert not final.with_name(f"{final.name}.tmp").exists()
+
 
 def test_container_exists(fake_smolvm):
     fake_smolvm.respond(

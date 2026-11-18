@@ -130,7 +130,13 @@ def _builder_build(tag, dockerfile, context, build_args=None):
 
 
 def _builder_save(tag, dest):
-    """Save a built image to a docker-archive tar at ``dest``."""
+    """Save a built image to a docker-archive tar at ``dest``.
+
+    The archive is written to a temporary sibling and renamed into place, so
+    the export never targets an existing tar: podman/buildah refuse to append
+    to a docker-archive and fail with "doesn't support modifying existing
+    images".
+    """
     builder = _host_builder()
     if builder is None:
         return subprocess.CompletedProcess(
@@ -141,7 +147,13 @@ def _builder_save(tag, dest):
         )
     dest = pathlib.Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    return _run([builder, "save", "-o", str(dest), tag])
+    tmp = dest.with_name(f"{dest.name}.tmp")
+    result = _run([builder, "save", "-o", str(tmp), tag])
+    if result.returncode == 0:
+        os.replace(tmp, dest)
+    elif tmp.exists():
+        tmp.unlink()
+    return result
 
 
 def image_tar_path(tag):
