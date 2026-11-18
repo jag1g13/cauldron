@@ -35,8 +35,8 @@ mcreate() { "$SMOLVM_BIN" machine create "$@"; }
 mstart()  { "$SMOLVM_BIN" machine start "$@"; }
 mexec()   { "$SMOLVM_BIN" machine exec "$@"; }
 mremove() {
-  "$SMOLVM_BIN" machine delete --name "$1" 2>/dev/null ||
-    "$SMOLVM_BIN" machine rm     --name "$1" 2>/dev/null || true
+  "$SMOLVM_BIN" machine delete --name "$1" --force 2>/dev/null ||
+    "$SMOLVM_BIN" machine rm     --name "$1" --force 2>/dev/null || true
 }
 # run a command inside the machine, capturing combined output to the report
 inm() { mexec --name "$name" --user root -- "$@" 2>&1 | tee -a "$REPORT"; }

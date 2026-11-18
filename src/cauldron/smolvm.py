@@ -470,11 +470,14 @@ def stop_container(name):
 
 
 def remove_container(name, force=False):
-    """Remove a machine. Returns True on success."""
-    args = ["machine", "delete", "--name", name]
-    if force:
-        args.append("--force")
-    return _smolvm(args).returncode == 0
+    """Remove a machine. Returns True on success.
+
+    ``--force`` is always passed: smolvm asks for confirmation when stdin is
+    not a terminal and refuses the delete without it — even for stopped
+    machines. Cauldron is always non-interactive and the CLI already guards
+    removing running machines unless the user passes ``--force``.
+    """
+    return _smolvm(["machine", "delete", "--name", name, "--force"]).returncode == 0
 
 
 def container_shell(name, fallback="bash"):

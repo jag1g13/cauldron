@@ -391,10 +391,11 @@ def test_start_stop_restart_remove(fake_smolvm):
     calls = fake_smolvm.calls()
     assert any(c[:2] == ["machine", "start"] for c in calls)
     assert any(c[:2] == ["machine", "stop"] for c in calls)
-    assert any(c[:2] == ["machine", "delete"] for c in calls)
-    assert any(
-        c == ["machine", "delete", "--name", "cauldron-foo", "--force"] for c in calls
-    )
+    delete_calls = [c for c in calls if c[:2] == ["machine", "delete"]]
+    assert delete_calls == [
+        ["machine", "delete", "--name", "cauldron-foo", "--force"],
+        ["machine", "delete", "--name", "cauldron-foo", "--force"],
+    ]
 
 
 def test_container_shell_probes_printenv(fake_smolvm):

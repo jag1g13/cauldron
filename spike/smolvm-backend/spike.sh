@@ -41,8 +41,8 @@ mexec()   { "$SMOLVM_BIN" machine exec "$@"; }
 mlist()   { "$SMOLVM_BIN" machine list "$@"; }
 mremove() {
   local n="$1"
-  "$SMOLVM_BIN" machine delete --name "$n" 2>/dev/null ||
-    "$SMOLVM_BIN" machine rm     --name "$n" 2>/dev/null || true
+  "$SMOLVM_BIN" machine delete --name "$n" --force 2>/dev/null ||
+    "$SMOLVM_BIN" machine rm     --name "$n" --force 2>/dev/null || true
 }
 track() { TRACKED+=("$1"); }
 mktmp() { local d; d="$(mktemp -d)"; TMPDIRS+=("$d"); printf '%s' "$d"; }
