@@ -227,7 +227,10 @@ Tests run against a real Podman when one is reachable — a local engine, or the
 mounted static `podman-remote` when run inside a cauldron — and skip otherwise.
 Argument-level assertions use a recording fake executable rather than mocking
 Podman in-process. Long-running tests are deselected by default; run them with
-`uv run pytest -m slow`.
+`uv run pytest -m slow`. The slow set also drives a real `smolvm` end to end
+— machine create/start/exec/stop/delete and the host-port conflict error —
+when a real `smolvm` is on `PATH` and `/dev/kvm` is writable by this user
+(works both on a host and inside a cauldron), and skips otherwise.
 
 ## Documentation
 

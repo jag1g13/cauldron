@@ -536,6 +536,18 @@ def test_port_in_use_detection():
     assert smolvm.port_from_error("nope") is None
 
 
+def test_port_from_error_prefers_smolvm_publish_shape():
+    """The real 1.35.3 failure names the guest port after the host port."""
+    stderr = (
+        "Error: agent operation failed: start machine: agent operation failed: "
+        "configure virtio-net: failed to start virtio network runtime: cannot "
+        "publish host TCP 127.0.0.1:22189 to guest TCP 3000: Address already "
+        "in use (os error 98)"
+    )
+    assert smolvm.is_port_in_use_error(stderr) is True
+    assert smolvm.port_from_error(stderr) == 22189
+
+
 def test_find_port_owner_returns_empty(fake_smolvm):
     # smolvm does not expose host:guest mappings, so a port can't be attributed
     # to a specific machine.

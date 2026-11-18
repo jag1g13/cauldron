@@ -617,11 +617,17 @@ def is_port_in_use_error(stderr):
 def port_from_error(stderr):
     """Return the host port (int) from a port bind failure, or None.
 
-    The port is the last standalone number (not part of an IP address) that
-    appears before an "in use" phrase.
+    smolvm phrases the failure as ``cannot publish host TCP 127.0.0.1:<host>
+    to guest TCP <guest>: ... in use``, with the guest port after the host
+    port, so that shape is matched first. Other messages fall back to the
+    last standalone number (not part of an IP address) before an "in use"
+    phrase.
     """
     if not stderr:
         return None
+    publish = re.search(r"publish host TCP (?:[\d.]+:)?(\d+)", stderr, re.IGNORECASE)
+    if publish:
+        return int(publish.group(1))
     phrase = re.search(r"(?:already in use|in use)", stderr, re.IGNORECASE)
     if not phrase:
         return None
