@@ -369,11 +369,13 @@ def test_run_container_appends_known_hosts(fake_smolvm):
         "/proj",
         1000,
         1000,
-        known_hosts=["1.2.3.4 example.com"],
+        known_hosts=["example.com:1.2.3.4"],
     )
     exec_calls = [c for c in fake_smolvm.calls() if c[:2] == ["machine", "exec"]]
     assert exec_calls
+    # config entries ("hostname:ip") become valid hosts(5) lines ("ip hostname")
     assert "1.2.3.4 example.com" in exec_calls[0][-1]
+    assert "example.com:1.2.3.4" not in exec_calls[0][-1]
     assert exec_calls[0][0] == "machine"
 
 

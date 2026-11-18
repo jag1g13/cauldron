@@ -433,7 +433,9 @@ def run_container(
         return result
 
     # known_hosts: no native smolvm support, so append to the guest /etc/hosts.
+    # Config entries are "hostname:ip"; hosts(5) lines are "ip hostname".
     for entry in known_hosts or []:
+        hostname, _, ip = entry.partition(":")
         _smolvm(
             [
                 "machine",
@@ -445,7 +447,7 @@ def run_container(
                 "--",
                 "sh",
                 "-c",
-                f"echo {entry} >> /etc/hosts",
+                f"echo {shlex.quote(ip)} {shlex.quote(hostname)} >> /etc/hosts",
             ]
         )
     return result
