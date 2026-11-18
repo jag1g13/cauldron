@@ -163,6 +163,19 @@ Project ports override global ports when they refer to the same host port.
 
 If a container fails to start because a host port is already in use, `cauldron up` names the other Cauldron container (if any) that holds the port, so you know which one to stop or reconfigure.
 
+### Devices
+
+Use the `[container]` table to pass host device nodes into the container, for example `/dev/kvm`.
+
+```toml
+[container]
+devices = [
+  "/dev/kvm",
+]
+```
+
+Each entry is passed to Podman's `--device` flag. Use this instead of a mount for device nodes: under rootless Podman a bind-mounted device shows up owned by `nobody:nogroup`, while `--device` hands it to the container user. Project entries override global entries for the same host path.
+
 ### Known hosts
 
 Use the `[container]` table to append entries to the container's `/etc/hosts` file for custom domain resolution.

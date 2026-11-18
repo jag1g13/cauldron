@@ -362,6 +362,35 @@ def test_run_container_publishes_ports(fake_podman):
     assert "127.0.0.1:3000:3000" in args
 
 
+def test_run_container_passes_devices(fake_podman):
+    podman.run_container(
+        name="cauldron-foo",
+        image="cauldron-foo:latest",
+        workdir="/home/deck/projects/foo",
+        project_dir="/home/deck/projects/foo",
+        uid="1000",
+        gid="1000",
+        devices=["/dev/kvm", "/dev/dri:/dev/dri:rwm"],
+    )
+    args = fake_podman.calls()[0]
+    assert "--device" in args
+    assert "/dev/kvm" in args
+    assert "/dev/dri:/dev/dri:rwm" in args
+
+
+def test_run_container_omits_devices_by_default(fake_podman):
+    podman.run_container(
+        name="cauldron-foo",
+        image="cauldron-foo:latest",
+        workdir="/home/deck/projects/foo",
+        project_dir="/home/deck/projects/foo",
+        uid="1000",
+        gid="1000",
+    )
+    args = fake_podman.calls()[0]
+    assert "--device" not in args
+
+
 def test_run_container_adds_known_hosts(fake_podman):
     podman.run_container(
         name="cauldron-foo",

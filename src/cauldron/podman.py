@@ -266,6 +266,7 @@ def run_container(
     mounts=None,
     ports=None,
     known_hosts=None,
+    devices=None,
     podman_socket=None,
     podman_client=None,
     entrypoint=False,
@@ -279,6 +280,8 @@ def run_container(
     ``ports`` is a list of strings in Podman's ``-p`` syntax.
     ``known_hosts`` is a list of strings in ``hostname:ip`` format, passed to
     Podman's ``--add-host`` flag.
+    ``devices`` is a list of strings in Podman's ``--device`` syntax (for
+    example ``/dev/kvm``) for host device passthrough.
     ``podman_socket`` and ``podman_client`` mount the host's Podman socket and
     a matching static Podman client into the container, and point the container
     at the host service through ``CONTAINER_HOST``. This lets the container use
@@ -339,6 +342,9 @@ def run_container(
 
     for port in ports or []:
         args.extend(["-p", port])
+
+    for device in devices or []:
+        args.extend(["--device", device])
 
     for entry in known_hosts or []:
         args.extend(["--add-host", entry])

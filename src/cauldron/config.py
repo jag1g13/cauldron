@@ -136,6 +136,37 @@ def _known_host_key(entry):
     return entry.split(":", 1)[0]
 
 
+def _device_key(device):
+    """Return the merge key (host path) for a device passthrough string."""
+    if not isinstance(device, str):
+        raise ValueError(f"Device must be a string, got {type(device).__name__}")
+    return device.split(":", 1)[0]
+
+
+def _merge_devices(global_devices, project_devices, warn):
+    """Merge device lists by host path, project overrides global."""
+    seen = {}
+
+    def _add(source_name, device):
+        key = _device_key(device)
+        if key in seen:
+            previous_source, _ = seen[key]
+            if previous_source == "global" and source_name == "project":
+                warn(f"Project device overrides global device for path {key!r}")
+            elif previous_source == source_name:
+                warn(f"Duplicate {source_name} device for path {key!r}")
+            else:
+                warn(f"Device for path {key!r} is defined more than once")
+        seen[key] = (source_name, device)
+
+    for device in global_devices:
+        _add("global", device)
+    for device in project_devices:
+        _add("project", device)
+
+    return [device for _, device in seen.values()]
+
+
 def _merge_known_hosts(global_hosts, project_hosts, warn):
     """Merge known-hosts lists by hostname, project overrides global."""
     seen = {}
@@ -187,9 +218,9 @@ def load_config(project_dir=None, warn=None):
 
     Project config overrides global config. The ``env`` table is merged at the
     key level. The ``container`` table is merged key-by-key, but ``mounts`` are
-    merged by ``target``, ``ports`` by host port, and ``known_hosts`` by
-    hostname so that project values override global values without discarding
-    unrelated entries.
+    merged by ``target``, ``ports`` by host port, ``known_hosts`` by hostname,
+    and ``devices`` by host device path so that project values override
+    global values without discarding unrelated entries.
     """
     if warn is None:
         warn = warnings.warn
@@ -216,7 +247,7 @@ def load_config(project_dir=None, warn=None):
 
     # Merge simple container keys directly.
     for key, value in project_container.items():
-        if key not in ("mounts", "ports", "known_hosts"):
+        if key not in ("mounts", "ports", "known_hosts", "devices"):
             global_container[key] = value
 
     if "mounts" in global_container or "mounts" in project_container:
@@ -230,6 +261,13 @@ def load_config(project_dir=None, warn=None):
         global_container["ports"] = _merge_ports(
             global_container.get("ports", []),
             project_container.get("ports", []),
+            warn,
+        )
+
+    if "devices" in global_container or "devices" in project_container:
+        global_container["devices"] = _merge_devices(
+            global_container.get("devices", []),
+            project_container.get("devices", []),
             warn,
         )
 
@@ -340,6 +378,16 @@ def container_mounts(config):
 def container_ports(config):
     """Return port forwarding strings for the container runtime."""
     return list(config.get("container", {}).get("ports", []))
+
+
+def container_devices(config):
+    """Return host device paths for the container runtime.
+
+    Each entry is a string in Podman's ``--device`` syntax (for example
+    ``/dev/kvm``), passed through so host devices are accessible inside the
+    container.
+    """
+    return list(config.get("container", {}).get("devices", []))
 
 
 def container_known_hosts(config):

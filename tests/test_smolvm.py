@@ -257,6 +257,24 @@ def test_run_container_adds_volumes_ports_and_env(fake_smolvm):
     assert "-p" in create and "8080:80" in create
 
 
+def test_run_container_ignores_devices(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    result = smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        devices=["/dev/kvm"],
+    )
+    assert result.returncode == 0
+    create = fake_smolvm.calls()[0]
+    assert "--device" not in create
+    assert "/dev/kvm" not in create
+
+
 def test_run_container_expands_path_placeholder(fake_smolvm, monkeypatch):
     monkeypatch.setattr(smolvm, "_image_default_path", lambda tag: "/usr/bin:/bin")
     fake_smolvm.respond(["machine", "create"], returncode=0)

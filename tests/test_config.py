@@ -273,6 +273,80 @@ def test_container_ports_returns_empty_when_missing():
     assert config.container_ports({}) == []
 
 
+def test_load_config_merges_devices(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+devices = ["/dev/kvm", "/dev/dri"]
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+devices = ["/dev/kvm:rwm"]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir, warn=lambda _msg: None)
+
+    devices = loaded["container"]["devices"]
+    assert "/dev/kvm:rwm" in devices
+    assert "/dev/dri" in devices
+    assert "/dev/kvm" not in devices
+
+
+def test_load_config_warns_on_device_overlap(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+devices = ["/dev/kvm"]
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+devices = ["/dev/kvm:rwm"]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+
+    warnings = []
+    config.load_config(project_dir, warn=warnings.append)
+    assert any("overrides global device" in w for w in warnings)
+
+
+def test_load_config_rejects_non_string_device(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+devices = ["/dev/kvm", 3]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    with pytest.raises(ValueError, match="Device must be a string"):
+        config.load_config(project_dir, warn=lambda _msg: None)
+
+
+def test_container_devices_returns_configured_devices():
+    cfg = {"container": {"devices": ["/dev/kvm", "/dev/dri"]}}
+    assert config.container_devices(cfg) == ["/dev/kvm", "/dev/dri"]
+
+
+def test_container_devices_returns_empty_when_missing():
+    assert config.container_devices({}) == []
+
+
 def test_load_config_merges_known_hosts_by_hostname(tmp_path, monkeypatch):
     global_file = tmp_path / "home" / "cauldron.toml"
     global_file.parent.mkdir()

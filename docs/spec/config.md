@@ -5,7 +5,7 @@ Cauldron reads optional TOML configuration files. Project settings override glob
 - Global config: `~/.config/cauldron/cauldron.toml`
 - Project config: `.cauldron/cauldron.toml`
 
-When both files exist, Cauldron merges them. The `[env]` table is merged at the key level, the `[container]` table is merged key-by-key, and `mounts`, `ports`, and `known_hosts` are merged by their natural identifiers so that project values override global values without discarding unrelated entries.
+When both files exist, Cauldron merges them. The `[env]` table is merged at the key level, the `[container]` table is merged key-by-key, and `mounts`, `ports`, `known_hosts`, and `devices` are merged by their natural identifiers so that project values override global values without discarding unrelated entries.
 
 ## Top-level sections
 
@@ -103,6 +103,22 @@ ports = [
 ```
 
 Each entry is a string in Podman's `-p` syntax. Global and project ports are merged by host port. If a project port maps the same host port as a global port, the project port wins and Cauldron emits a warning.
+
+#### `devices`
+
+Pass host device nodes into the container. Each entry is a string in Podman's `--device` syntax.
+
+```toml
+[container]
+devices = [
+  "/dev/kvm",
+  "/dev/dri:/dev/dri:rwm",
+]
+```
+
+The short form is a host device path (e.g. `/dev/kvm`); the long form is `host-path:container-path:permissions`, where permissions are `r`, `w`, and `m` combinations. Entries are passed to Podman's `--device` flag. Global and project devices are merged by host path: a project entry for the same host path overrides the global one and Cauldron emits a warning.
+
+This matters under rootless Podman: `--device` arranges the device node's ownership for the container's user namespace, whereas a plain bind mount of `/dev/<node>` shows up owned by `nobody:nogroup` and is not usable by the container user. Use `devices` rather than a `mounts` entry for host device nodes.
 
 #### `known_hosts`
 
@@ -237,8 +253,9 @@ With the project config above, the effective configuration is:
 
 - A mount must have `source` and `target`. Missing keys raise an error when the config is loaded.
 - A port must be a string. Non-string port entries raise an error when the config is loaded.
+- A device must be a string. Non-string device entries raise an error when the config is loaded.
 - A known-hosts entry must be a string in `hostname:ip` format. Entries without a colon raise an error when the config is loaded.
-- Overlapping mount targets, host ports, or known-hosts hostnames are allowed but produce a warning; the last defined value wins.
+- Overlapping mount targets, host ports, device paths, or known-hosts hostnames are allowed but produce a warning; the last defined value wins.
 - Invalid TOML continues to raise the same TOML parsing error as before.
 
 ## Scope

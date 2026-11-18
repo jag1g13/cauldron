@@ -1,7 +1,7 @@
 # Cauldron project configuration.
 #
 # Use the [container] table to customise the container image, mounts, ports,
-# and known-hosts entries.
+# devices, and known-hosts entries.
 # Use the [env] table to set environment variables inside the container.
 # PATH values may use ${PATH} as a placeholder for the image's default PATH.
 # Use the [scripts] table to inject Bash scripts that run at container
@@ -26,6 +26,10 @@
 
 # ports = [
 #   "8080:8080",
+# ]
+
+# devices = [
+#   "/dev/kvm",  # e.g. for running VMs inside the container
 # ]
 
 # known_hosts = [

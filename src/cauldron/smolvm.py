@@ -352,6 +352,7 @@ def run_container(
     mounts=None,
     ports=None,
     known_hosts=None,
+    devices=None,
     podman_socket=None,
     podman_client=None,
     entrypoint=False,
@@ -359,7 +360,8 @@ def run_container(
     """Create and start a named machine from the built image tar.
 
     ``image`` is the project image tag; it is resolved to its docker-save tar.
-    ``podman_socket``/``podman_client`` are Podman-specific and ignored.
+    ``devices``, ``podman_socket`` and ``podman_client`` are Podman-specific
+    and ignored.
 
     Returns the ``CompletedProcess`` of the start; check ``returncode``.
     """

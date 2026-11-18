@@ -463,6 +463,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         mounts=mounts,
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
+        devices=config.container_devices(cfg),
         podman_socket=socket_path,
         podman_client=client_path,
         entrypoint=has_entrypoint,
