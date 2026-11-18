@@ -528,3 +528,84 @@ def test_resolve_script_falls_back_to_global_script(tmp_path, monkeypatch):
 def test_resolve_script_rejects_paths(tmp_path):
     with pytest.raises(ValueError, match="must be a filename"):
         config.resolve_script(".cauldron/setup.sh", tmp_path)
+
+
+def test_backend_type_defaults_to_podman():
+    assert config.backend_type({}) == "podman"
+    assert config.backend_type({"backend": {}}) == "podman"
+
+
+def test_backend_type_returns_configured_value():
+    assert config.backend_type({"backend": {"type": "smolvm"}}) == "smolvm"
+
+
+def test_backend_smolvm_returns_table():
+    assert config.backend_smolvm({"backend": {"smolvm": {"cpus": 2}}}) == {"cpus": 2}
+
+
+def test_backend_smolvm_returns_empty_when_missing():
+    assert config.backend_smolvm({}) == {}
+    assert config.backend_smolvm({"backend": {"type": "smolvm"}}) == {}
+
+
+def test_load_config_merges_backend_table(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[backend]
+type = "podman"
+
+[backend.smolvm]
+cpus = 4
+memory = 4096
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[backend]
+type = "smolvm"
+
+[backend.smolvm]
+memory = 8192
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir, warn=lambda _msg: None)
+
+    assert loaded["backend"]["type"] == "smolvm"
+    # nested provider table merges key-by-key: project overrides memory,
+    # global's cpus is preserved
+    assert loaded["backend"]["smolvm"] == {"cpus": 4, "memory": 8192}
+
+
+def test_load_config_backend_absent_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "cauldron.toml").write_text('[env]\nEDITOR = "vim"\n')
+
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir)
+
+    assert "backend" not in loaded
+    assert config.backend_type(loaded) == "podman"
+
+
+def test_load_config_warns_on_backend_type_override(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text('[backend]\ntype = "podman"\n')
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvm"\n')
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+
+    warnings = []
+    config.load_config(project_dir, warn=warnings.append)
+    assert any("backend type" in w and "overrides global" in w for w in warnings)

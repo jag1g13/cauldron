@@ -162,6 +162,26 @@ def _merge_known_hosts(global_hosts, project_hosts, warn):
     return [entry for _, entry in seen.values()]
 
 
+def _merge_backend(global_backend, project_backend, warn):
+    """Merge ``[backend]`` tables; project overrides global by key.
+
+    Nested per-provider tables (e.g. ``[backend.smolvm]``) are merged
+    key-by-key so a project setting overrides only that specific key.
+    """
+    merged = dict(global_backend)
+    for key, value in project_backend.items():
+        if isinstance(value, dict):
+            base = merged.get(key)
+            if base is not None and not isinstance(base, dict):
+                raise ValueError(f"[backend.{key}] must be a table")
+            merged[key] = {**(base or {}), **value}
+        else:
+            if key == "type" and key in merged and merged[key] != value:
+                warn(f"Project backend type {value!r} overrides global {merged[key]!r}")
+            merged[key] = value
+    return merged
+
+
 def load_config(project_dir=None, warn=None):
     """Load merged global and project configuration.
 
@@ -223,12 +243,28 @@ def load_config(project_dir=None, warn=None):
     if global_container:
         config["container"] = global_container
 
+    global_backend = config.get("backend", {})
+    project_backend = project_config.get("backend", {})
+    if global_backend or project_backend:
+        config["backend"] = _merge_backend(global_backend, project_backend, warn)
+
     return config
 
 
 def base_image(config):
     """Return the configured base image, or None to use the default."""
     return config.get("container", {}).get("base_image")
+
+
+def backend_type(config):
+    """Return the configured backend type, defaulting to ``podman``."""
+    return config.get("backend", {}).get("type", "podman")
+
+
+def backend_smolvm(config):
+    """Return the ``[backend.smolvm]`` settings table (empty if absent)."""
+    table = config.get("backend", {}).get("smolvm")
+    return dict(table) if isinstance(table, dict) else {}
 
 
 def set_base_image(project_dir, new_image):

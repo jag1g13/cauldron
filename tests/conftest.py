@@ -13,14 +13,15 @@ import uuid
 
 import pytest
 
-from cauldron import config, podman, project
+from cauldron import backend, config, podman, project
 
 FAKE_PODMAN = pathlib.Path(__file__).parent / "fake_podman.py"
+FAKE_SMOLVM = pathlib.Path(__file__).parent / "fake_smolvm.py"
 BUSYBOX_IMAGE = "docker.io/library/busybox:1.37.0"
 
 
-class FakePodman:
-    """Handle for the recording podman executable used by argument-level tests."""
+class FakeRuntime:
+    """Handle for a recording runtime executable used by argument-level tests."""
 
     def __init__(self, log, responses):
         self.log = pathlib.Path(log)
@@ -83,6 +84,14 @@ def reset_verbose():
     podman.set_verbose(False)
     yield
     podman.set_verbose(False)
+
+
+@pytest.fixture(autouse=True)
+def reset_backend():
+    """Re-resolve the runtime backend for each test (no caching across tests)."""
+    backend.reset()
+    yield
+    backend.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -175,4 +184,22 @@ def fake_podman(tmp_path, monkeypatch):
     # so an ambient nested-cauldron environment does not switch commands into the
     # nested code path. Nested tests set running_in_remote explicitly.
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
-    return FakePodman(log, responses)
+    return FakeRuntime(log, responses)
+
+
+@pytest.fixture
+def fake_smolvm(tmp_path, monkeypatch):
+    """Point smolvm at the recording fake and return its handle."""
+    log = tmp_path / "smolvm.log"
+    responses = tmp_path / "smolvm-responses.json"
+    state = tmp_path / "smolvm.state"
+    binary = tmp_path / "smolvm"
+    binary.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_SMOLVM}" "$@"\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("CAULDRON_SMOLVM_PATH", str(binary))
+    monkeypatch.setenv("FAKE_SMOLVM_LOG", str(log))
+    monkeypatch.setenv("FAKE_SMOLVM_RESPONSES", str(responses))
+    monkeypatch.setenv("FAKE_SMOLVM_STATE", str(state))
+    # The built project image is a docker-save tar; keep it in a test-local dir.
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "smoltar"))
+    return FakeRuntime(log, responses)

@@ -4,7 +4,7 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 
 ## Features
 
-- Rootless Podman containers.
+- Rootless Podman containers, with an opt-in `smolvm` microVM backend.
 - Per-project environments identified by directory name.
 - Custom Dockerfiles layered on top of the configured base image via the `CAULDRON_BASE` build argument.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
@@ -36,6 +36,23 @@ Cauldron reads optional TOML configuration files. Project settings override glob
 
 - Global: `~/.config/cauldron/cauldron.toml`
 - Project: `.cauldron/cauldron.toml`
+
+### Runtime backend
+
+By default each project runs in a rootless Podman container. An opt-in `smolvm`
+backend runs the project in a smol microVM instead:
+
+```toml
+[backend]
+type = "smolvm"
+```
+
+This requires the `smolvm` binary on your `PATH` (override its location with
+`CAULDRON_SMOLVM_PATH`) and a host with KVM. The project image is still built
+with your host builder (`podman` or `docker`) and handed to smolvm as a
+`docker save` tar, so custom Dockerfiles and the `CAULDRON_BASE` build argument
+work the same way. Podman-only options such as `podman_socket` are ignored under
+the smolvm backend.
 
 ### Base image
 

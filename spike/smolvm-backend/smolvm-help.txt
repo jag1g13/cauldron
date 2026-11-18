@@ -1,0 +1,611 @@
+# smolvm CLI surface (captured by spike on 2026-11-18T08:53:24Z)
+
+## machine --help
+Manage machines (create, start, stop, exec) (boxed: the machine arg structs dwarf every other variant)
+
+Usage: smolvm machine [OPTIONS] <COMMAND>
+
+Commands:
+  run               Run a container image in an ephemeral machine
+  exec              Run a command in a machine (inside its image's container, if it has one)
+  create            Create a new named machine configuration
+  start             Start a machine
+  branch            Branch a running branchable machine into an independent child (CoW memory + disks) [alias: fork]
+  checkpoint        Save a running machine, including RAM, as a portable checkpoint
+  checkpoint-warm   Prepare an incremental checkpoint for fast restores without starting a VM
+  checkpoint-prune  Remove unused objects from a checkpoint store
+  checkpoint-log    Show the history a checkpoint carries, or every checkpoint in a store
+  branch-release    Assign parameters and release one held branch-pool slot [alias: fork-release]
+  stop              Stop a running machine
+  pause             Save RAM and disk durably, then stop at the saved execution boundary
+  resume            Resume saved execution in the same machine
+  delete            Delete a machine configuration [alias: rm]
+  status            Show machine status
+  stats             Show a running machine's CPU and memory usage
+  logs              Show the workload's output (stdout and stderr), even while stopped
+  egress-events     Show egress denials — outbound connections the machine's egress policy refused
+  ls                List all machines [alias: list]
+  resize            Grow a running machine's CPUs, RAM, or disks without rebooting
+  update            Modify settings on a stopped machine (mounts, ports, resources, disks)
+  images            List cached images and storage usage
+  prune             Remove unused images and layers to free disk space
+  shell             Open an interactive shell in a running machine [alias: sh]
+  cp                Copy files between host and machine
+  sync              Synchronize guest-local staged mounts back to their host directories
+  mount             Mount or unmount host directories on a running machine, without a restart
+  monitor           Monitor a machine with health checks and restart policy
+  data-dir          Print the on-disk data directory path for a named machine
+  help              Print this message or the help of the given subcommand(s)
+
+Options:
+      --error-format <ERROR_FORMAT>  How a failure is reported on stderr: `text`, or `json` for `{"error":{"code":"NOT_FOUND","message":"…"}}` with a stable code [default: text] [possible values: text, json]
+      --state-dir <PATH>             Keep all smolvm state (machines, images, caches, the database) under PATH instead of the user's default directories, for example to run a second engine version beside an installed one. Not supported on Windows
+  -h, --help                         Print help
+
+## machine create
+Create a new named machine configuration
+
+Usage: smolvm machine create [OPTIONS] [-- <COMMAND>...]
+
+Arguments:
+  [COMMAND]...
+          Command to run as the machine's persistent workload (image machines). Launched as a detached container on every `start`, so it stays running (e.g. a pre-warmed browser to be branched). Without this, the image's own ENTRYPOINT/CMD is launched instead; if the image defines neither (e.g. a bare rootfs directory), the machine boots to just the agent and commands come from `exec`/`shell`.
+          
+          `last = true` requires the `--` separator. With the machine name now a flag, a bare positional (an old-style `machine create myvm`) must fail loudly instead of being silently captured as the workload command.
+
+Options:
+      --error-format <ERROR_FORMAT>
+          How a failure is reported on stderr: `text`, or `json` for `{"error":{"code":"NOT_FOUND","message":"…"}}` with a stable code
+          
+          [default: text]
+          [possible values: text, json]
+
+      --restore-cache-entries <N>
+          Recently restored checkpoints to keep ready, so jumping back to one clones it instead of rebuilding its RAM (0 turns the cache off)
+          
+          [default: 3]
+
+      --restore-cache-gib <GiB>
+          Space the kept checkpoints may hold together, in GiB; each holds a whole checkpoint's RAM and disks
+          
+          [default: 16]
+
+      --state-dir <PATH>
+          Keep all smolvm state (machines, images, caches, the database) under PATH instead of the user's default directories, for example to run a second engine version beside an installed one. Not supported on Windows
+
+      --keep-identity
+          With `--from` a checkpoint: keep the hostname and machine ID it was saved with instead of giving the new machine its own identity. For rewinding a machine to an earlier save point, which skips about a second of identity reset; do not run two machines from one checkpoint with it
+
+  -n, --name <NAME>
+          Name for the machine (auto-generated if omitted)
+          
+          [env: SMOLVM_MACHINE_NAME=]
+
+      --label <KEY=VALUE>
+          Attach metadata to the machine (repeatable), e.g. `--label owner=exo --label sandbox=agent-7`.
+          
+          smolvm never interprets these. They exist so a process managing many machines can identify its own later — which sandbox a machine serves, who created it, whether it may be reclaimed — instead of encoding that into the name. Read them back with `machine ls --json`.
+
+  -I, --image <IMAGE>
+          Container image: a registry reference (alpine, python:3.12-alpine), a `docker save` archive (./myapp.tar, or `-` to read one from stdin), or an unpacked rootfs directory (./rootfs/). A bare name is always a registry reference — pipe `docker save` to use a locally built image
+
+      --max-image-size <SIZE>
+          Raise the max accepted local image-archive size (e.g. 16GiB, 512M, or a raw byte count); default 8GiB. For legitimately large images — sets SMOLVM_MAX_IMAGE_BYTES for this run
+
+      --cpus <N>
+          Maximum vCPUs the machine may use [default: 4, or the Smolfile/pack value]. Idle vCPUs cost nothing; this caps consumption, not a reservation
+
+      --mem <MiB>
+          Maximum memory in MiB the machine may use [default: half the host's RAM, at most 8192, or the Smolfile/pack value]. Elastic: only touched memory is committed
+
+      --storage <GiB>
+          Storage disk size in GiB (for OCI layers and container data)
+
+      --overlay <GiB>
+          Overlay disk size in GiB (for persistent rootfs changes)
+
+      --block-io <BLOCK_IO>
+          Host block I/O engine. Async uses restricted io_uring for raw disks on Linux
+
+          Possible values:
+          - sync:  Service one request at a time on the virtio block worker
+          - async: Submit queued raw-disk reads through a restricted Linux io_uring
+
+      --disk-durability <DISK_DURABILITY>
+          When guest disk writes must reach the host's disk. `full` (default): a guest fsync waits for the host disk. `deferred`: guest writes reach it on the host's schedule, much faster for fsync-heavy work such as database commits, but a host crash can lose recent writes
+
+          Possible values:
+          - full:     A guest flush waits for the host's disk
+          - deferred: Guest writes reach the host's disk on the host's schedule
+
+      --disk <PATH[:ro]>
+          Attach a host disk image or block device (repeatable), appearing in the guest as /dev/vdc, /dev/vdd, ... in the order given. Append `:ro` for read-only. The disk is handed over raw — smolvm never formats or mounts it — so a machine can put, say, a database's WAL on a different device from its data
+
+  -v, --volume <HOST|REMOTE:GUEST[:ro|rw|staged]>
+          Mount host directory (can be used multiple times). Also accepts S3-compatible object storage, mounted inside the guest on every start: `s3://bucket/prefix:/data[:ro]` (credentials from --env AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, optional AWS_ENDPOINT_URL for R2/MinIO; anonymous without them; needs --net; `:ro` is its only mode). Nothing is required of the image: the agent performs the mount itself. `:staged` runs from a guest-local copy, seeded at first boot, for metadata-heavy workloads; `machine sync` and graceful stop mirror it back onto the host source, deleting host files the copy lacks. A container path alone (`-v /var/lib/docker`) is a directory on the machine's own disk instead of its overlay root, which nested container runtimes need; it persists across stop and start
+
+      --allow-system-mounts
+          Allow trusted read-only host `/etc` and `/var/log` mounts below `/host`. This exposes sensitive host data to the guest and must not be used for untrusted workloads
+
+  -p, --port <PORT[-END]|HOST[-END]:GUEST[-END][/udp]>
+          Expose port from VM to host (single port or one-to-one range, repeatable; append /udp for UDP)
+
+      --net
+          Enable outbound network access
+
+      --net-backend <NET_BACKEND>
+          Select the networking backend
+
+          Possible values:
+          - tsi:        Use libkrun TSI networking
+          - virtio-net: Use virtio-net with the host-side smolvm network stack
+
+      --dns <IP>
+          Custom DNS resolver for the guest (implies --net). Defaults to the host's own resolver, so this is only needed when that is not the one to use
+
+      --dns-option <OPTION>
+          Resolver option for the guest resolv.conf (repeatable, in order), e.g. `--dns-option timeout:1 --dns-option use-vc`. Written as one `options` line by every guest writer of resolv.conf (see `resolv.conf(5)`). glibc honors every accepted option; musl (Alpine) honors only `ndots`, `timeout` and `attempts` and ignores the rest
+
+      --shm-size <SIZE>
+          Size of the workload's /dev/shm: bytes with a k/m/g suffix (`512m`, `2g`) or a share of guest RAM (`25%`). Defaults to half the RAM
+
+      --guest-subnet <CIDR>
+          IPv4 subnet for the guest link, e.g. 10.200.0.0/30 (implies --net, virtio-net). The gateway and resolver take the first address, the guest the second. Use it when the guest runs Tailscale or another VPN that claims the default 100.96.0.0/30
+
+      --network <NAME>
+          Join a named inter-VM network (implies --net, virtio-net only): members can reach each other by IP (100.96.N.2, leased at start; names do not resolve)
+
+      --allow-cidr <CIDR>
+          Allow egress to specific CIDR range (can be used multiple times, implies --net)
+
+      --deny-cidr <CIDR>
+          Deny egress to a CIDR range, checked before anything is allowed (can be used multiple times, implies --net)
+
+      --allow-udp <CIDR[:PORT[-END]]>
+          Allow UDP to a CIDR, optionally on one port or a range, also under an egress interceptor; checked after every deny, DNS keeps its own path (can be used multiple times, implies --net)
+
+      --allow-host <HOSTNAME>
+          Allow egress to specific hostname, resolved at VM start (can be used multiple times, implies --net)
+
+      --allow-host-pattern <PATTERN>
+          Opt-in egress pattern: exact hostname or `*.domain` subdomains only
+
+      --credential <NAME=ENV_VAR@HOST[,HOST...][:body][:set-header=HEADER]>
+          Bind a credential the workload may use without ever seeing it: NAME=ENV_VAR@HOST[,HOST...][:body][:set-header=HEADER]. The guest gets a placeholder in ENV_VAR; the host substitutes the real value (from a `--secret-env`/`--secret-file` ref of the same name, else the host variable ENV_VAR) only on HTTPS requests to the listed hosts. Add :body for OAuth form-body tokens or :set-header=HEADER to set a request header to the complete secret value. Can be used multiple times; implies --net
+
+      --outbound-localhost-only
+          Restrict outbound to localhost only (implies --net)
+
+      --block-private
+          Block private, internal and link-local destinations (the LAN, cloud metadata, CGNAT, the host's loopback) while the public internet stays open. Implies --net
+
+      --allow-private <CIDR>
+          Re-open one private range under --block-private, such as an internal registry (implies --block-private). Can be used multiple times
+
+      --gpu
+          Enable GPU acceleration (Vulkan via virtio-gpu)
+
+      --nested
+          Expose the host's virtualization extensions so the guest can run KVM -- i.e. run smolvm, QEMU or another hypervisor inside the machine. Off by default: nesting turns work the guest would do natively into vmexits. Needs nested KVM on a Linux host (kvm_intel/kvm_amd nested=1) or an M3 or newer Mac on macOS 15+
+
+      --gpu-vram <MiB>
+          GPU shared-memory region size in MiB. Ignored without --gpu. Default 4096 (4 GiB). Must be > 0
+
+      --rosetta
+          Enable Rosetta 2 for x86_64 binary translation on Apple Silicon
+
+      --oci-platform <OS/ARCH>
+          Image platform to pull for a multi-arch image, for example linux/amd64. Defaults to linux/amd64 with --rosetta, else the guest's architecture
+
+      --expose-socket <GUEST_PATH[:HOST_PATH]>
+          Expose a Unix socket the guest listens on to the host (repeatable). The host reaches it at the given host path, or `<basename>` in `smolvm machine data-dir` by default. Format: GUEST_PATH[:HOST_PATH]
+
+      --mount-socket <HOST_PATH:GUEST_PATH>
+          Mount a host Unix socket into the guest (repeatable), so a guest process reaches the host service at GUEST_PATH. Format: HOST_PATH:GUEST_PATH
+
+      --init <COMMAND>
+          Run command once, on the machine's first start (can be used multiple times)
+
+  -e, --env <KEY=VALUE>
+          Set environment variable (can be used multiple times)
+
+  -w, --workdir <DIR>
+          Set working directory inside the machine
+
+  -u, --user <USER>
+          Run the workload as this user, like `docker run --user`: a name from the image or a numeric `uid[:gid]`. Overrides the image's USER, so a workload can match the owner of a mounted host directory. `init` commands still run as root
+
+      --ssh-agent
+          Forward host SSH agent into the VM (enables git/ssh without exposing keys)
+
+      --stop-on-exit
+          Stop the machine once its workload exits, whatever the exit status. The guest flushes storage as for `machine stop`, then powers off
+
+      --stop-signal <SIGNAL>
+          Signal sent to the workload when the machine stops, so it can save its state and exit (e.g. SIGINT, SIGRTMIN+3; default SIGTERM)
+
+      --stop-timeout <SECONDS>
+          Seconds the workload gets to exit after its stop signal before it is killed (default 10, at most 300)
+
+      --cuda
+          Remote guest CUDA Driver-API calls to the host NVIDIA GPU over vsock
+
+      --auto-graph
+          Ask compatible CUDA frameworks to graph safe compiled regions. Implies --cuda; arbitrary eager CUDA calls are not captured
+
+      --docker-socket
+          Expose the guest's Docker daemon socket to the host as a Unix socket (DOCKER_HOST=unix://…). Requires dockerd running in the VM
+
+      --auto-ports
+          Publish every TCP port a process in the machine listens on at the same port on host loopback while it listens (dev servers, `docker run -p`). A host port already in use is skipped; ports below 1024 are not published automatically. Applies when the CLI starts the machine
+
+      --auto-ports-exclude <PORT>
+          Never publish this guest port automatically (repeatable). Implies --auto-ports
+
+      --secret-env <GUEST_VAR=HOST_VAR>
+          Inject a secret from a host env var (GUEST_VAR=HOST_VAR), resolved at each launch. Only the reference is persisted, never the value
+
+      --secret-file <GUEST_VAR=PATH>
+          Inject a secret from a host file (GUEST_VAR=/abs/path), resolved at each launch. Only the reference is persisted, never the value
+
+      --smolfile <PATH>
+          Load configuration from a Smolfile (TOML)
+          
+          [alias: -s]
+
+      --from <PATH>
+          Create from a `.smolmachine` pack or restore a `.smolcheckpoint`. The artifact supplies the defaults (a pack) or fixed state (a live checkpoint); flags and a Smolfile override the defaults, and a setting a checkpoint fixes is refused by name
+
+      --at <GENERATION>
+          With --from <checkpoint>: restore an earlier generation the checkpoint retains — `~N` (N back along its history), a generation id, or an id prefix. Quote `~N` in zsh, e.g. `--at '~2'`. See `machine checkpoint-log`
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Resources:
+      --cache-disk <BASE:/PATH>
+          Mount a shared cache disk at a guest path: `BASE:/guest/path`. BASE is a disk image (raw or qcow2) that stays read-only and can back many machines at once; this machine reads it and writes only to its own fast local layer, which every branch of it copies. The guest mounts its ext4 filesystem, making one if BASE is blank
+
+Network:
+      --use-host-proxy
+          Pass this host's proxy into the workload: HTTPS_PROXY/HTTP_PROXY/ ALL_PROXY/NO_PROXY from the environment, or on macOS the system proxy. A proxy on the host's loopback is rewritten to an address the guest can reach. Also used for the image pull. Implies --net
+
+      --trust-host-certs
+          Trust the certificates this host trusts for image pulls and the workload — e.g. a corporate TLS-inspection root on the host. Mounts them read-only at /etc/smolvm-host-trust/ca-bundle.pem and points SSL_CERT_FILE, NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE and similar at it. SMOLVM_HOST_CA_BUNDLE selects another bundle. Not with --credential
+
+Security:
+      --secret-keychain <GUEST_VAR=SERVICE[/ACCOUNT]>
+          Inject a secret from the host keychain (GUEST_VAR=SERVICE or GUEST_VAR=SERVICE/ACCOUNT): a macOS Keychain generic password, or a Linux Secret Service item, read at launch and never persisted
+
+## machine run
+Run a container image in an ephemeral machine
+
+Usage: smolvm machine run [OPTIONS] [COMMAND]...
+
+Arguments:
+  [COMMAND]...
+          Command and arguments to run (default: image entrypoint or /bin/sh)
+
+Options:
+      --error-format <ERROR_FORMAT>
+          How a failure is reported on stderr: `text`, or `json` for `{"error":{"code":"NOT_FOUND","message":"…"}}` with a stable code
+          
+          [default: text]
+          [possible values: text, json]
+
+  -I, --image <IMAGE>
+          Container image: a registry reference (alpine, ubuntu:22.04, ghcr.io/org/image), a `docker save` archive (./myapp.tar, or `-` to read one from stdin), or an unpacked rootfs directory (./rootfs/). A bare name is always a registry reference — pipe `docker save` to use a locally built image. Optional when a Smolfile provides the image, or for bare VM mode
+
+      --state-dir <PATH>
+          Keep all smolvm state (machines, images, caches, the database) under PATH instead of the user's default directories, for example to run a second engine version beside an installed one. Not supported on Windows
+
+      --shm-size <SIZE>
+          Size of the workload's /dev/shm: bytes with a k/m/g suffix (`512m`, `2g`) or a share of guest RAM (`25%`). Defaults to half the RAM
+
+      --init <COMMAND>
+          Run command before the workload (can be used multiple times); the same as `init` in a Smolfile, which the CLI form extends when both are given. Init provisions the machine, so it runs as root regardless of `--user` or the image's USER
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Execution:
+      --max-image-size <SIZE>
+          Raise the max accepted local image-archive size (e.g. 16GiB, 512M, or a raw byte count); default 8GiB. For legitimately large images — sets SMOLVM_MAX_IMAGE_BYTES for this run
+
+      --seed-digest-ttl <SECONDS>
+          Reuse an image digest resolved at most this many seconds ago when seeding, skipping the per-run registry check inside the window. Default: resolve and authorize at the registry on every run
+
+  -n, --name <NAME>
+          Name a persistent machine when used with --detach. Matches the --name flag on start/stop/exec/status/resize. In foreground mode (no -d), --name is ignored with a warning
+
+  -d, --detach
+          Start the command in the background and detach, leaving the VM running. Use `machine exec` to run further commands against the VM and `machine stop` to tear it down
+
+  -i, --interactive
+          Keep stdin open for interactive input
+
+  -t, --tty
+          Allocate a pseudo-TTY (use with -i for interactive shells)
+
+      --timeout <DURATION>
+          Kill command after duration (e.g., "30s", "5m", "1h")
+
+Machine source:
+      --from <PATH>
+          Run a packed `.smolmachine` artifact ephemerally (the VM is discarded on exit) — the one-shot equivalent of `machine create --from … + start`. CPU/memory fall back to the artifact's baked manifest unless overridden
+
+Container:
+  -w, --workdir <DIR>
+          Set working directory inside container
+
+  -u, --user <USER>
+          Run as this user, like `docker run --user`: a name from the image or a numeric `uid[:gid]`. Overrides the image's USER
+
+  -e, --env <KEY=VALUE>
+          Set environment variable (can be used multiple times)
+
+      --oci-platform <OS/ARCH>
+          Target OCI platform for multi-arch images
+
+  -v, --volume <HOST|REMOTE:CONTAINER[:ro|rw|staged]>
+          Mount host directory into container (can be used multiple times). Also accepts S3-compatible object storage, mounted inside the container: `s3://bucket/prefix:/data[:ro]` (credentials from --env AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, optional AWS_ENDPOINT_URL for R2/MinIO; anonymous without them; needs --net; `:ro` is its only mode). Nothing is required of the image: the agent performs the mount itself. `:staged` runs from a guest-local copy, seeded at first boot, for metadata-heavy workloads; `machine sync` and graceful stop mirror it back onto the host source, deleting host files the copy lacks. A container path alone (`-v /var/lib/docker`) is a directory on the machine's own disk instead of its overlay root, which nested container runtimes need; it persists across stop and start
+
+      --allow-system-mounts
+          Allow trusted read-only host `/etc` and `/var/log` mounts below `/host`. This exposes sensitive host data to the guest and must not be used for untrusted workloads
+
+Network:
+  -p, --port <PORT[-END]|HOST[-END]:GUEST[-END][/udp]>
+          Expose port from container to host (single port or one-to-one range, repeatable; append /udp for UDP)
+
+      --net
+          Enable outbound network access
+
+      --net-backend <NET_BACKEND>
+          Select the networking backend
+
+          Possible values:
+          - tsi:        Use libkrun TSI networking
+          - virtio-net: Use virtio-net with the host-side smolvm network stack
+
+      --dns <IP>
+          Custom DNS resolver for the guest (implies --net). Defaults to the host's own resolver, so this is only needed when that is not the one to use
+
+      --dns-option <OPTION>
+          Resolver option for the guest resolv.conf (repeatable, in order), e.g. `--dns-option timeout:1 --dns-option use-vc`. Written as one `options` line by every guest writer of resolv.conf (see `resolv.conf(5)`). glibc honors every accepted option; musl (Alpine) honors only `ndots`, `timeout` and `attempts` and ignores the rest
+
+      --guest-subnet <CIDR>
+          IPv4 subnet for the guest link, e.g. 10.200.0.0/30 (implies --net, virtio-net). The gateway and resolver take the first address, the guest the second. Use it when the guest runs Tailscale or another VPN that claims the default 100.96.0.0/30
+
+      --network <NAME>
+          Join a named inter-VM network (implies --net, virtio-net only): members can reach each other by IP (100.96.N.2, leased at start; names do not resolve)
+
+      --allow-cidr <CIDR>
+          Allow egress to specific CIDR range (can be used multiple times, implies --net)
+
+      --deny-cidr <CIDR>
+          Deny egress to a CIDR range, checked before anything is allowed (can be used multiple times, implies --net)
+
+      --allow-udp <CIDR[:PORT[-END]]>
+          Allow UDP to a CIDR, optionally on one port or a range, also under an egress interceptor; checked after every deny, DNS keeps its own path (can be used multiple times, implies --net)
+
+      --allow-host <HOSTNAME>
+          Allow egress to specific hostname, resolved at VM start (can be used multiple times, implies --net)
+
+      --allow-host-pattern <PATTERN>
+          Opt-in egress pattern: exact hostname or `*.domain` subdomains only
+
+      --use-host-proxy
+          Pass this host's proxy into the workload: HTTPS_PROXY/HTTP_PROXY/ ALL_PROXY/NO_PROXY from the environment, or on macOS the system proxy. A proxy on the host's loopback is rewritten to an address the guest can reach. Also used for the image pull. Implies --net
+
+      --trust-host-certs
+          Trust the certificates this host trusts for image pulls and the workload — e.g. a corporate TLS-inspection root on the host. Mounts them read-only at /etc/smolvm-host-trust/ca-bundle.pem and points SSL_CERT_FILE, NODE_EXTRA_CA_CERTS, REQUESTS_CA_BUNDLE and similar at it. SMOLVM_HOST_CA_BUNDLE selects another bundle. Not with --credential
+
+      --credential <NAME=ENV_VAR@HOST[,HOST...][:body][:set-header=HEADER]>
+          Bind a credential the workload may use without ever seeing it: NAME=ENV_VAR@HOST[,HOST...][:body][:set-header=HEADER]. The guest gets a placeholder in ENV_VAR; the host substitutes the real value (from a `--secret-env`/`--secret-file` ref of the same name, else the host variable ENV_VAR) only on HTTPS requests to the listed hosts. Add :body for OAuth form-body tokens or :set-header=HEADER to set a request header to the complete secret value. Can be used multiple times; implies --net
+
+      --outbound-localhost-only
+          Restrict outbound to localhost only (implies --net)
+
+      --block-private
+          Block private, internal and link-local destinations (the LAN, cloud metadata, CGNAT, the host's loopback) while the public internet stays open. Implies --net
+
+      --allow-private <CIDR>
+          Re-open one private range under --block-private, such as an internal registry (implies --block-private). Can be used multiple times
+
+      --allow-host-loopback
+          Let the guest reach services on the HOST's own loopback (127.0.0.1 / ::1); off by default so a sandbox can't reach host debuggers, Docker, or local databases. Cloud-metadata stays blocked. Implies --net
+
+      --docker-socket
+          Expose the guest's Docker daemon socket to the host as a Unix socket (DOCKER_HOST=unix://…). Requires dockerd running in the VM
+
+      --auto-ports
+          Publish every TCP port a process in the machine listens on at the same port on host loopback while it listens (dev servers, `docker run -p`). A host port already in use is skipped; ports below 1024 are not published automatically
+
+      --auto-ports-exclude <PORT>
+          Never publish this guest port automatically (repeatable). Implies --auto-ports
+
+      --expose-socket <GUEST_PATH[:HOST_PATH]>
+          Expose a Unix socket the guest listens on to the host (repeatable). The host reaches it at the given host path, or `<basename>` in `smolvm machine data-dir` by default. Format: GUEST_PATH[:HOST_PATH]
+
+      --mount-socket <HOST_PATH:GUEST_PATH>
+          Mount a host Unix socket into the guest (repeatable), so a guest process reaches the host service at GUEST_PATH. Format: HOST_PATH:GUEST_PATH
+
+      --proxy <URL>
+          Proxy URL used for the in-VM image pull (sets HTTP_PROXY and HTTPS_PROXY on the registry client). Example: `http://192.168.127.254:3128`
+
+      --no-proxy <LIST>
+          Comma-separated NO_PROXY list of hosts/CIDRs that bypass the proxy during image pull. Example: `127.0.0.1,localhost,.internal`
+
+Resources:
+      --gpu
+          Enable GPU acceleration (Vulkan via virtio-gpu)
+
+      --nested
+          Expose the host's virtualization extensions so the guest can run KVM -- i.e. run smolvm, QEMU or Docker Desktop's hypervisor inside the machine. Off by default: nesting turns work the guest would do natively into vmexits, so a nested guest runs far slower. Needs nested KVM on a Linux host (kvm_intel/kvm_amd nested=1) or an M3 or newer Mac on macOS 15+
+
+      --gpu-vram <MiB>
+          GPU shared-memory region size in MiB. Ignored without --gpu. Default 4096 (4 GiB). Must be > 0
+
+      --rosetta
+          Enable Rosetta 2 for x86_64 binary translation on Apple Silicon
+
+      --cpus <N>
+          Maximum vCPUs the machine may use [default: 4]. Idle vCPUs cost nothing; this caps what the workload can consume, it does not reserve it
+
+      --mem <MiB>
+          Maximum memory in MiB the machine may use [default: half the host's RAM, at most 8192]. Memory is elastic: the host commits only what the guest touches, up to this cap
+
+      --storage <GiB>
+          Writable data disk size in GiB (default 20). Bounds how much a workload can write: a disk-heavy or untrusted command fills this disk (ENOSPC), never the host. This is the flag to lower when sandboxing untrusted code
+
+      --overlay <GiB>
+          Container rootfs overlay (copy-on-write upper layer) size in GiB. NOT the writable-data cap — use --storage to bound how much a workload can write. Rarely needs setting
+
+      --block-io <BLOCK_IO>
+          Host block I/O engine. Async uses restricted io_uring for raw disks on Linux
+
+          Possible values:
+          - sync:  Service one request at a time on the virtio block worker
+          - async: Submit queued raw-disk reads through a restricted Linux io_uring
+
+      --disk-durability <DISK_DURABILITY>
+          When guest disk writes must reach the host's disk. `full` (default): a guest fsync waits for the host disk. `deferred`: guest writes reach it on the host's schedule, much faster for fsync-heavy work such as database commits, but a host crash can lose recent writes
+
+          Possible values:
+          - full:     A guest flush waits for the host's disk
+          - deferred: Guest writes reach the host's disk on the host's schedule
+
+      --disk <PATH[:ro]>
+          Attach a host disk image or block device (repeatable), appearing in the guest as /dev/vdc, /dev/vdd, ... in the order given. Append `:ro` for read-only. The disk is handed over raw — smolvm never formats or mounts it — so a machine can put, say, a database's WAL on a different device from its data
+
+      --cache-disk <BASE:/PATH>
+          Mount a shared cache disk at a guest path: `BASE:/guest/path`. BASE is a disk image (raw or qcow2) that stays read-only and can back many machines at once; this machine reads it and writes only to its own fast local layer, which every branch of it copies. The guest mounts its ext4 filesystem, making one if BASE is blank
+
+      --smolfile <PATH>
+          Load VM configuration from a Smolfile (TOML)
+          
+          [alias: -s]
+
+      --no-init-cache
+          Skip the init-layer cache: re-run `init` on every ephemeral run instead of baking `image + init` once into a cached, reusable artifact. Use this when `init` depends on live volume contents (and so cannot be safely cached)
+
+      --rebuild-init-cache
+          Rebuild the cached init layer even if a matching one already exists
+
+      --oci-cache
+          Cache the pulled OCI image on the host so repeat ephemeral runs of the same `--image` skip the registry pull. The image is baked once into a reusable `.smolmachine` (keyed by image + env) and every later run rehydrates from it instead of re-pulling inside the guest. The VM stays throwaway; only the image is cached. Registry images only
+
+Security:
+      --ssh-agent
+          Forward host SSH agent into the VM (enables git/ssh without exposing keys)
+
+      --secret-env <GUEST_VAR=HOST_VAR>
+          Inject a secret from a host env var (GUEST_VAR=HOST_VAR), resolved at launch. The value is never persisted to the machine record or a pack
+
+      --secret-file <GUEST_VAR=PATH>
+          Inject a secret from a host file (GUEST_VAR=/abs/path), resolved at launch. The value is never persisted to the machine record or a pack
+
+      --secret-keychain <GUEST_VAR=SERVICE[/ACCOUNT]>
+          Inject a secret from the host keychain (GUEST_VAR=SERVICE or GUEST_VAR=SERVICE/ACCOUNT): a macOS Keychain generic password, or a Linux Secret Service item, read at launch and never persisted
+
+      --unprivileged
+          Run the workload as an unprivileged container: restricted capabilities, read-only cgroup, and no extra tmpfs. By default the workload is "VM-grade" (the microVM is the isolation boundary, so it gets full privileges and any image — incl. systemd — boots). Use this for defense-in-depth with untrusted code. `init` always runs VM-grade (it needs privileges for apt/mounts)
+
+Hardware:
+      --cuda
+          Remote guest CUDA Driver-API calls to the host NVIDIA GPU over vsock
+
+      --auto-graph
+          Ask compatible CUDA frameworks to graph safe compiled regions. Implies --cuda; arbitrary eager CUDA calls are not captured
+
+Registry:
+      --docker-config
+          Mount ~/.docker/ into the VM. Registry credentials from `docker login` (credential helpers included) are resolved on the host for every pull, so this is only needed for other contents of the directory
+
+## machine exec
+Run a command in a machine (inside its image's container, if it has one)
+
+Usage: smolvm machine exec [OPTIONS] <COMMAND>...
+
+Arguments:
+  <COMMAND>...  Command and arguments to execute
+
+Options:
+      --error-format <ERROR_FORMAT>
+          How a failure is reported on stderr: `text`, or `json` for `{"error":{"code":"NOT_FOUND","message":"…"}}` with a stable code [default: text] [possible values: text, json]
+      --name <NAME>
+          Target machine (default: "default") [env: SMOLVM_MACHINE_NAME=]
+      --state-dir <PATH>
+          Keep all smolvm state (machines, images, caches, the database) under PATH instead of the user's default directories, for example to run a second engine version beside an installed one. Not supported on Windows
+  -w, --workdir <DIR>
+          Set working directory in the VM
+  -u, --user <USER>
+          Run as this user (name or `uid[:gid]`). Defaults to the machine's configured user, then the image's USER
+  -e, --env <KEY=VALUE>
+          Set environment variable (can be used multiple times)
+      --secret-env <GUEST_VAR=HOST_VAR>
+          Inject a secret from a host env var (GUEST_VAR=HOST_VAR) for this exec, resolved on the host. The value never persists to the record
+      --secret-file <GUEST_VAR=PATH>
+          Inject a secret from a host file (GUEST_VAR=/abs/path) for this exec, resolved on the host. The value never persists to the record
+      --timeout <DURATION>
+          Kill command after duration (e.g., "30s", "5m")
+  -i, --interactive
+          Keep stdin open for interactive input
+  -t, --tty
+          Allocate a pseudo-TTY (use with -i for shells)
+      --stream
+          Stream output in real-time (prints as it arrives)
+  -d, --detach
+          Detach: spawn the command in the background and return its PID immediately. The process keeps running (it is not killed when this command returns), so it can host long-lived services — e.g. a server bound to a published port. Incompatible with -i/-t and --stream
+  -h, --help
+          Print help
+
+Security:
+      --secret-keychain <GUEST_VAR=SERVICE[/ACCOUNT]>
+          Inject a secret from the host keychain (GUEST_VAR=SERVICE or GUEST_VAR=SERVICE/ACCOUNT): a macOS Keychain generic password, or a Linux Secret Service item, read at launch and never persisted
+
+## machine list
+List all machines
+
+Usage: smolvm machine ls [OPTIONS]
+
+Options:
+      --error-format <ERROR_FORMAT>  How a failure is reported on stderr: `text`, or `json` for `{"error":{"code":"NOT_FOUND","message":"…"}}` with a stable code [default: text] [possible values: text, json]
+  -v, --verbose                      Show detailed configuration (mounts, ports, PID)
+      --json                         Output in JSON format
+      --state-dir <PATH>             Keep all smolvm state (machines, images, caches, the database) under PATH instead of the user's default directories, for example to run a second engine version beside an installed one. Not supported on Windows
+  -q, --quiet                        Print only machine names, one per line
+  -h, --help                         Print help
+
+## machine start
+Start a machine
+
+Usage: smolvm machine start [OPTIONS]
+
+Options:
+      --error-format <ERROR_FORMAT>  How a failure is reported on stderr: `text`, or `json` for `{"error":{"code":"NOT_FOUND","message":"…"}}` with a stable code [default: text] [possible values: text, json]
+  -n, --name <NAME>                  Machine to start (default: "default") [env: SMOLVM_MACHINE_NAME=]
+      --branchable                   Start as a branch source: back guest RAM with a memfd (CoW-cloneable) and expose a control socket so the running machine can later be branched [alias: --forkable]
+      --state-dir <PATH>             Keep all smolvm state (machines, images, caches, the database) under PATH instead of the user's default directories, for example to run a second engine version beside an installed one. Not supported on Windows
+      --branch-pool-size <CHILDREN>  Plan a CUDA branch pool with this many runnable children. Smolvm reports a safe per-session VRAM share before the source initializes, so vLLM and similar runtimes size private caches without workload changes. Implies --branchable [alias: --fork-pool-size]
+      --cuda-vram-limit-mib <MIB>    Override the automatic logical VRAM budget for each source/child CUDA session. The workload still needs no changes. Requires --branch-pool-size
+      --seed-digest-ttl <SECONDS>    Reuse an image digest resolved at most this many seconds ago when seeding the first start, skipping the per-start registry check inside the window. Default: resolve and authorize at the registry every start
+      --egress-interceptor <ADDR>    Route outbound TCP through a host interceptor. Requires SMOLVM_INTERCEPTOR_TOKEN (64 hex digits). Other outbound datagrams except DNS are denied
+      --mediated-egress              Require a pre-dial host decision for each outbound TCP flow
+  -h, --help                         Print help
+
+Network:
+      --proxy <URL>      Proxy URL used for the in-VM image pull (sets HTTP_PROXY and HTTPS_PROXY on the registry client). Example: `http://192.168.127.254:3128`
+      --no-proxy <LIST>  Comma-separated NO_PROXY list of hosts/CIDRs that bypass the proxy during image pull. Example: `127.0.0.1,localhost,.internal`
+
+## machine stop
+Stop a running machine
+
+Usage: smolvm machine stop [OPTIONS]
+
+Options:
+      --error-format <ERROR_FORMAT>  How a failure is reported on stderr: `text`, or `json` for `{"error":{"code":"NOT_FOUND","message":"…"}}` with a stable code [default: text] [possible values: text, json]
+  -n, --name <NAME>                  Machine to stop (default: "default") [env: SMOLVM_MACHINE_NAME=]
+      --state-dir <PATH>             Keep all smolvm state (machines, images, caches, the database) under PATH instead of the user's default directories, for example to run a second engine version beside an installed one. Not supported on Windows
+  -t, --timeout <SECONDS>            Seconds the workload gets to exit after its stop signal before it is killed, instead of the machine's stop timeout (0 kills it at once)
+  -h, --help                         Print help

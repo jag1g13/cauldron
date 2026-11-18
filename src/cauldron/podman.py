@@ -2,13 +2,14 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
 import threading
 import warnings
 
-from cauldron import config as config_module
+from cauldron import imagebuild
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
 
 BASE_IMAGE = "docker.io/library/debian:trixie-slim"
@@ -202,53 +203,13 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
     Returns the ``subprocess.CompletedProcess``; check ``result.returncode``.
     """
     base = base_image or BASE_IMAGE
-    scripts = scripts or {}
-    project_dir = pathlib.Path(project_dir or ".").resolve()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = pathlib.Path(tmpdir)
-        script_files = {}
-
-        for hook, value in scripts.items():
-            path = config_module.resolve_script(value, project_dir)
-            content = path.read_text()
-
-            script_path = tmpdir / f"{hook}.sh"
-            script_path.write_text(content)
-            script_files[hook] = f"{hook}.sh"
-
-        lines = [
-            "ARG CAULDRON_BASE",
-            "FROM ${CAULDRON_BASE}",
-            "USER root",
-            f"RUN groupadd -g {gid} -o cauldron && useradd -m -u {uid} -g {gid} -o cauldron && usermod -p '*' cauldron",
-            "RUN apt-get update && apt-get install -y --no-install-recommends openssh-server && rm -rf /var/lib/apt/lists/*",
-            f"RUN mkdir -p /run/sshd /home/cauldron/.ssh /home/cauldron/.config && chown {uid}:{gid} /home/cauldron/.ssh /home/cauldron/.config && chmod 700 /home/cauldron/.ssh",
-            f"ENV HOME={CONTAINER_HOME}",
-        ]
-
-        for hook, filename in script_files.items():
-            lines.append(f"COPY {filename} /usr/local/share/cauldron/{hook}.sh")
-            lines.append(f"RUN chmod +x /usr/local/share/cauldron/{hook}.sh")
-
-        lines.append("USER cauldron")
-
-        build_args = {"CAULDRON_BASE": base}
-        if "post_build" in script_files:
-            lines.extend(
-                [
-                    "ARG CAULDRON_RUN_POST_BUILD=false",
-                    'RUN if [ "$CAULDRON_RUN_POST_BUILD" = "true" ]; then /usr/local/share/cauldron/post_build.sh; fi',
-                ]
-            )
-            build_args["CAULDRON_RUN_POST_BUILD"] = "true"
-
-        if "entrypoint" in script_files:
-            lines.append('ENTRYPOINT ["/usr/local/share/cauldron/entrypoint.sh"]')
-
-        dockerfile = tmpdir / "Dockerfile"
-        dockerfile.write_text("\n".join(lines) + "\n")
-        return build_image(tag, dockerfile, tmpdir, build_args=build_args)
+        build_args = imagebuild.materialize_project_build(
+            tmpdir, uid, gid, base, scripts, project_dir
+        )
+        return build_image(tag, tmpdir / "Dockerfile", tmpdir, build_args=build_args)
 
 
 def container_exists(name):
@@ -654,3 +615,16 @@ def find_port_owner(host_port):
     except (TypeError, ValueError):
         return []
     return [c["name"] for c in list_containers() if port in c.get("host_ports", [])]
+
+
+# --------------------------------------------------------------------------
+# VSCode Remote-SSH proxy
+# --------------------------------------------------------------------------
+
+
+def ssh_proxy_command(container):
+    """Return the sshd ProxyCommand that reaches a container's sshd via exec."""
+    return (
+        f"{shlex.quote(_podman_bin())} exec -u 0 -i {container}"
+        " /usr/sbin/sshd -i -o UsePAM=no -o PasswordAuthentication=no"
+    )
