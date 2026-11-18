@@ -622,6 +622,16 @@ def test_backend_smolvm_returns_empty_when_missing():
     assert config.backend_smolvm({"backend": {"type": "smolvm"}}) == {}
 
 
+def test_backend_smolvm_nested_defaults_to_false():
+    assert config.backend_smolvm_nested({}) is False
+    assert config.backend_smolvm_nested({"backend": {"smolvm": {}}}) is False
+
+
+def test_backend_smolvm_nested_reads_flag():
+    cfg = {"backend": {"smolvm": {"nested": True}}}
+    assert config.backend_smolvm_nested(cfg) is True
+
+
 def test_load_config_merges_backend_table(tmp_path, monkeypatch):
     global_file = tmp_path / "home" / "cauldron.toml"
     global_file.parent.mkdir()

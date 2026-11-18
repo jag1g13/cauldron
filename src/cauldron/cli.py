@@ -471,6 +471,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         podman_socket=socket_path,
         podman_client=client_path,
         entrypoint=has_entrypoint,
+        nested=config.backend_smolvm_nested(cfg),
     )
     if result.returncode != 0:
         raise click.ClickException(

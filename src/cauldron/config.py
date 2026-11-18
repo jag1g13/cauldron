@@ -305,6 +305,17 @@ def backend_smolvm(config):
     return dict(table) if isinstance(table, dict) else {}
 
 
+def backend_smolvm_nested(config):
+    """Return whether smol machines should expose nested KVM to the guest.
+
+    ``[backend.smolvm] nested = true`` passes smolvm's ``--nested`` on
+    ``machine create``, so the guest gets its own ``/dev/kvm`` and can run
+    VMs itself. Requires the host to support nested KVM; smolvm fails the
+    start cleanly when it does not.
+    """
+    return bool(backend_smolvm(config).get("nested", False))
+
+
 def set_base_image(project_dir, new_image):
     """Update the ``base_image`` entry in the project or global config file.
 

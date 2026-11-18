@@ -60,6 +60,17 @@ with your host builder (`podman` or `docker`) and handed to smolvm as a
 work the same way. Podman-only options such as `podman_socket` are ignored under
 the smolvm backend.
 
+Machines can expose nested KVM to the guest, so it can run its own VMs (see
+the smolvm-in-smolvm notes in `docs/nested-cauldron.md`):
+
+```toml
+[backend.smolvm]
+nested = true
+```
+
+This passes smolvm's `--nested` on machine creation; the host must support
+nested KVM or smolvm fails the start cleanly.
+
 ### Base image
 
 Use the `[container]` table to override the default Debian base image. This is useful when a project needs a different distribution or a pre-installed toolchain.

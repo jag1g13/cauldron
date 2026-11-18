@@ -97,7 +97,13 @@ def reset_backend():
 
 @pytest.fixture(autouse=True)
 def isolate_user_config(tmp_path, monkeypatch):
-    """Stop the ambient user config and Dockerfile from affecting tests."""
+    """Stop ambient configs from leaking into tests.
+
+    Runs from a fresh empty directory (so the repository's own project
+    config — which selects the runtime backend — is never read), and points
+    the global config and Dockerfile paths at test-local files.
+    """
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "global.toml")
     monkeypatch.setattr(
         project, "DOCKERFILE_GLOBAL_PATH", tmp_path / "global.Dockerfile"

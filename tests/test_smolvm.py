@@ -78,6 +78,22 @@ def test_kvm_check_reports_unwritable_device(monkeypatch, tmp_path):
     assert "user namespaces" in hint
 
 
+def test_run_container_passes_nested_flag(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    smolvm.run_container("cauldron-foo", "img:latest", "/p", "/p", 1000, 1000)
+    create_call = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "create"])
+    assert "--nested" not in create_call
+
+
+def test_run_container_with_nested_exposes_guest_kvm(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    smolvm.run_container(
+        "cauldron-foo", "img:latest", "/p", "/p", 1000, 1000, nested=True
+    )
+    create_call = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "create"])
+    assert "--nested" in create_call
+
+
 def test_image_tar_path_uses_override_dir_and_sanitizes(tmp_path, monkeypatch):
     monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "tar"))
     path = smolvm.image_tar_path("docker.io/library/debian:trixie-slim")

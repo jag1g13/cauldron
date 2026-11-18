@@ -387,12 +387,14 @@ def run_container(
     podman_socket=None,
     podman_client=None,
     entrypoint=False,
+    nested=False,
 ):
     """Create and start a named machine from the built image tar.
 
     ``image`` is the project image tag; it is resolved to its docker-save tar.
     ``devices``, ``podman_socket`` and ``podman_client`` are Podman-specific
-    and ignored.
+    and ignored. ``nested`` passes smolvm's ``--nested`` so the guest can
+    run its own VMs on its own /dev/kvm.
 
     Returns the ``CompletedProcess`` of the start; check ``returncode``.
     """
@@ -402,6 +404,8 @@ def run_container(
     args.extend(["-I", str(tar)])
     args.extend(["--label", f"{PROJECT_LABEL}={project_dir}"])
     args.append("--net")
+    if nested:
+        args.append("--nested")
     args.extend(["-u", f"{uid}:{gid}"])
     if workdir:
         args.extend(["-w", str(workdir)])

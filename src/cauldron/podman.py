@@ -270,6 +270,7 @@ def run_container(
     podman_socket=None,
     podman_client=None,
     entrypoint=False,
+    nested=False,
 ):
     """Create and start a detached container with the standard mounts.
 
@@ -286,6 +287,7 @@ def run_container(
     a matching static Podman client into the container, and point the container
     at the host service through ``CONTAINER_HOST``. This lets the container use
     the host's images and build cache without nested Podman.
+    ``nested`` is smolvm-specific and ignored.
 
     When ``entrypoint`` is True, the image's configured entrypoint is used and
     no default ``sleep infinity`` command is appended. This is used when the

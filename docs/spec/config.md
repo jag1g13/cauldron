@@ -9,6 +9,35 @@ When both files exist, Cauldron merges them. The `[env]` table is merged at the 
 
 ## Top-level sections
 
+### `[backend]` — runtime backend
+
+`type` selects the runtime for the project's development environment. The
+default is `podman` (rootless Podman container); `smolvm` runs it in a smol
+microVM instead (see the README's "Runtime backend" and
+`docs/nested-cauldron.md`).
+
+```toml
+[backend]
+type = "smolvm"
+```
+
+The `[backend.smolvm]` table carries smolvm-specific settings and applies
+only under the smolvm backend:
+
+#### `nested`
+
+```toml
+[backend.smolvm]
+nested = true
+```
+
+Passes smolvm's `--nested` on `machine create`, giving the guest its own
+`/dev/kvm` so it can run VMs itself (for example a Cauldron inside the
+machine using the smolvm backend). Off by default; the host must support
+nested KVM or smolvm fails the machine start cleanly. The workload user in
+the guest is unprivileged, so grant the guest's device access from a
+lifecycle `init` script (init scripts run as root in the guest).
+
 ### `[container]` — container runtime options
 
 The `[container]` table customises the image and runtime behaviour of the project's container.
