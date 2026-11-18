@@ -237,6 +237,7 @@ when a real `smolvm` is on `PATH` and `/dev/kvm` is writable by this user
 - [Architecture and design](docs/spec/overview.md)
 - [CLI reference](docs/spec/cli.md)
 - [Configuration reference](docs/spec/config.md)
+- [Nested Cauldron: smolvm inside Podman](docs/nested-cauldron.md)
 
 ## Status
 
