@@ -165,11 +165,12 @@ def run_test_container(base_image=None):
     return _run(["run", "--rm", base, "echo", "cauldron-check-ok"]).returncode == 0
 
 
-def build_image(tag, dockerfile, context, build_args=None):
+def build_image(tag, dockerfile, context, build_args=None, build_network=None):
     """Build an image from a Dockerfile and tag it.
 
     ``build_args`` is an optional dictionary of build arguments passed to
-    Podman as ``--build-arg key=value``.
+    Podman as ``--build-arg key=value``. ``build_network`` is an optional
+    value for Podman's ``--network`` flag (for example ``host``).
 
     Returns the ``subprocess.CompletedProcess``; check ``result.returncode``.
     The captured ``result.stderr`` lets callers inspect build failures.
@@ -181,13 +182,17 @@ def build_image(tag, dockerfile, context, build_args=None):
         "-f",
         str(dockerfile),
     ]
+    if build_network:
+        args.extend(["--network", build_network])
     for key, value in (build_args or {}).items():
         args.extend(["--build-arg", f"{key}={value}"])
     args.append(str(context))
     return _run(args)
 
 
-def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_dir=None):
+def build_project_image(
+    tag, uid, gid, base_image=None, scripts=None, project_dir=None, build_network=None
+):
     """Build the final project image with the host user configured.
 
     The base image is supplied through the ``CAULDRON_BASE`` build argument.
@@ -198,7 +203,8 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
     as an executable script at ``/usr/local/share/cauldron/<hook>.sh``. Project
     scripts take precedence over global scripts. The ``post_build`` hook runs
     as the final build step as the ``cauldron`` user. If an ``entrypoint`` hook
-    is present, the image entrypoint is set to run it.
+    is present, the image entrypoint is set to run it. ``build_network`` is an
+    optional value for Podman's ``--network`` flag (for example ``host``).
 
     Returns the ``subprocess.CompletedProcess``; check ``result.returncode``.
     """
@@ -209,7 +215,13 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
         build_args = imagebuild.materialize_project_build(
             tmpdir, uid, gid, base, scripts, project_dir
         )
-        return build_image(tag, tmpdir / "Dockerfile", tmpdir, build_args=build_args)
+        return build_image(
+            tag,
+            tmpdir / "Dockerfile",
+            tmpdir,
+            build_args=build_args,
+            build_network=build_network,
+        )
 
 
 def container_exists(name):
@@ -271,6 +283,7 @@ def run_container(
     podman_client=None,
     entrypoint=False,
     nested=False,
+    network=None,
 ):
     """Create and start a detached container with the standard mounts.
 
@@ -287,6 +300,9 @@ def run_container(
     a matching static Podman client into the container, and point the container
     at the host service through ``CONTAINER_HOST``. This lets the container use
     the host's images and build cache without nested Podman.
+    ``network`` is an optional value for Podman's ``--network`` flag (for
+    example ``host``). Note that Podman discards ``ports`` in host network
+    mode, warning as it starts the container.
     ``nested`` is smolvm-specific and ignored.
 
     When ``entrypoint`` is True, the image's configured entrypoint is used and
@@ -316,6 +332,9 @@ def run_container(
     ]
 
     args.extend(["-e", f"HOME={CONTAINER_HOME}"])
+
+    if network:
+        args.extend(["--network", network])
 
     podman_socket_url = None
     if podman_socket and podman_client:

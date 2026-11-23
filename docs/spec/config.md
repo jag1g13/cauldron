@@ -53,6 +53,41 @@ base_image = "astral/uv:python3.14-trixie"
 
 Use a pre-built container image, not a Dev Container *template*. Templates (e.g. `ghcr.io/devcontainers/templates/...`) are OCI artifacts whose layers use a media type that Podman cannot build from, so `podman build` fails with `Unknown media type during manifest conversion`. The equivalent pre-built images live at `mcr.microsoft.com/devcontainers/...` (see <https://github.com/devcontainers/images>) and build correctly. When Cauldron detects this failure, it offers to rewrite `base_image` to the matching pre-built image and retry the build.
 
+#### `build_network`
+
+Set the network used for image builds by passing the builder's `--network`
+flag (for example `host`). Unset by default, in which case the builder's own
+default is used. Useful when the builder's default container networking cannot
+resolve names or reach the network — for example building inside a microVM or
+container whose userland networking is degraded, where `--network host` runs
+the build steps in the host's own network namespace.
+
+```toml
+[container]
+build_network = "host"
+```
+
+#### `network`
+
+Set the network of the project container itself by passing the container
+runtime's `--network` flag (for example `host`). Unset by default, in which
+case the runtime's own default is used — typically a private bridge with NAT
+(DNS in that mode is provided by the runtime, and works wherever the runtime's
+own networking works). `host` runs the container in the host's own network
+namespace instead, sharing the host's resolver and interfaces: the fix for
+environments where the runtime's container networking is degraded (for
+example inside microVMs whose nested containers cannot resolve names). Note
+that ports published via `ports` are discarded in host networking mode (the
+runtime warns as it starts the container), and that when running against a
+remote Podman service (`podman_socket`) `host` refers to that host's network
+namespace. The smolvm backend ignores this key (machines are always created
+with `--net`).
+
+```toml
+[container]
+network = "host"
+```
+
 #### `podman_socket`
 
 Use the host's Podman service from inside the container through its socket. The
@@ -117,6 +152,8 @@ Host environment variables (e.g. `$HOME`, `$SSH_AUTH_SOCK`) are expanded in both
 Global and project mounts are merged by `target`. If a project mount has the same target as a global one, the project mount wins and Cauldron emits a warning. Duplicates within the same file are also warned about.
 
 When SELinux is installed and enabled on the host, Cauldron warns if a mount's options do not include the `z` or `Z` relabel option. This is a warning, not an error; if the container cannot access the mounted files, add `Z` (private unshared) or `z` (shared) to the options.
+
+Under the smolvm backend, mounts are classified by their source path, because smolvm's virtiofs share only accepts directories: Unix sockets (e.g. `$SSH_AUTH_SOCK`) are passed with `--mount-socket` (there is no read-only form, so `ro` is ignored), directories are shared with `-v` (honouring `ro`), and anything else (plain files, missing paths) is skipped with a warning.
 
 #### `ports`
 

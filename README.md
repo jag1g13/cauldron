@@ -58,7 +58,10 @@ that ACL on kvm uevents, `scripts/kvm-acl-fix.sh` makes it durable — see
 with your host builder (`podman` or `docker`) and handed to smolvm as a
 `docker save` tar, so custom Dockerfiles and the `CAULDRON_BASE` build argument
 work the same way. Podman-only options such as `podman_socket` are ignored under
-the smolvm backend.
+the smolvm backend. Configured mounts are classified by source path:
+directories are shared over virtiofs, Unix sockets (e.g. `$SSH_AUTH_SOCK`)
+are passed with `--mount-socket` (no read-only form, so `ro` is ignored),
+and plain files or missing paths are skipped with a warning.
 
 Machines can expose nested KVM to the guest, so it can run its own VMs (see
 the smolvm-in-smolvm notes in `docs/nested-cauldron.md`):
@@ -179,6 +182,23 @@ ports = [
 Project ports override global ports when they refer to the same host port.
 
 If a container fails to start because a host port is already in use, `cauldron up` names the other Cauldron container (if any) that holds the port, so you know which one to stop or reconfigure.
+
+### Network
+
+Two separate `[container]` keys control networking, each passed straight to the runtime's `--network` flag, and each unset by default (the runtime's own mode — a private bridge with NAT):
+
+- `build_network` — the network used for image **build** steps
+- `network` — the network of the **running project container**
+
+Set them to `host` when the default container networking cannot resolve names or reach the network — for example inside a microVM or VM whose nested container networking is degraded, where `host` runs the process in the host's own network namespace (for the guest, that is the VM; with `podman_socket`, the machine hosting the Podman service). The smolvm backend ignores `network` (machines use smolvm's own networking).
+
+```toml
+[container]
+build_network = "host"
+network = "host"
+```
+
+In host networking mode published ports (`ports`) are discarded, with a warning from the runtime as the container starts.
 
 ### Devices
 

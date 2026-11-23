@@ -8,6 +8,9 @@ which is pointed at the same fake for these tests.
 
 import json
 import os
+import socket
+
+import pytest
 
 from cauldron import smolvm
 
@@ -145,6 +148,28 @@ def test_build_image_builds_and_tags(fake_smolvm, monkeypatch, tmp_path):
     ]
 
 
+def test_build_image_passes_build_network(fake_smolvm, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM base\n")
+    result = smolvm.build_image("tag:1", dockerfile, tmp_path, build_network="host")
+    assert result.returncode == 0
+    assert fake_smolvm.calls() == [
+        [
+            "build",
+            "-t",
+            "tag:1",
+            "-f",
+            str(dockerfile),
+            "--network",
+            "host",
+            str(tmp_path),
+        ]
+    ]
+
+
 def test_build_image_reports_no_builder(monkeypatch):
     monkeypatch.setattr(smolvm, "_host_builder", lambda: None)
     result = smolvm.build_image("tag:1", "Dockerfile", ".")
@@ -277,9 +302,11 @@ def test_run_container_omits_sleep_with_entrypoint(fake_smolvm):
     assert "--" not in create
 
 
-def test_run_container_adds_volumes_ports_and_env(fake_smolvm):
+def test_run_container_adds_volumes_ports_and_env(fake_smolvm, tmp_path):
     fake_smolvm.respond(["machine", "create"], returncode=0)
     fake_smolvm.respond(["machine", "start"], returncode=0)
+    data = tmp_path / "data"
+    data.mkdir()
     smolvm.run_container(
         "cauldron-foo",
         "cauldron-foo:latest",
@@ -288,13 +315,81 @@ def test_run_container_adds_volumes_ports_and_env(fake_smolvm):
         1000,
         1000,
         env={"FOO": "bar"},
-        mounts=[{"source": "/data", "target": "/data", "options": "ro"}],
+        mounts=[{"source": str(data), "target": "/data", "options": "ro"}],
         ports=["8080:80"],
     )
     create = fake_smolvm.calls()[0]
     assert "-e" in create and "FOO=bar" in create
-    assert "/data:/data:ro" in create
+    assert f"{data}:/data:ro" in create
     assert "-p" in create and "8080:80" in create
+
+
+def test_run_container_mounts_directory_via_v(fake_smolvm, tmp_path):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        mounts=[{"source": str(shared), "target": "/mnt/shared"}],
+    )
+    create = fake_smolvm.calls()[0]
+    assert f"{shared}:/mnt/shared" in create
+    assert "--mount-socket" not in create
+
+
+def test_run_container_mounts_socket_via_mount_socket(fake_smolvm, tmp_path):
+    agent = tmp_path / "agent.sock"
+    sock = socket.socket(socket.AF_UNIX)
+    sock.bind(str(agent))
+    sock.close()
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        mounts=[
+            {
+                "source": str(agent),
+                "target": "/run/user/1000/keyring/ssh",
+                "options": "ro",
+            }
+        ],
+    )
+    create = fake_smolvm.calls()[0]
+    assert "--mount-socket" in create
+    assert f"{agent}:/run/user/1000/keyring/ssh" in create
+    # smolvm has no read-only socket mount, so the ro suffix is dropped
+    assert f"{agent}:/run/user/1000/keyring/ssh:ro" not in create
+    assert f"-v {agent}" not in create
+
+
+def test_run_container_skips_unsupported_mounts_with_warning(fake_smolvm, tmp_path):
+    file = tmp_path / ".gitconfig"
+    file.write_text("[core]\n")
+    with pytest.warns(UserWarning, match="Skipping mount"):
+        smolvm.run_container(
+            "cauldron-foo",
+            "cauldron-foo:latest",
+            "/proj",
+            "/proj",
+            1000,
+            1000,
+            mounts=[
+                {"source": str(file), "target": "/home/cauldron/.gitconfig"},
+                {"source": "/nonexistent/source", "target": "/nope"},
+            ],
+        )
+    create = fake_smolvm.calls()[0]
+    assert str(file) not in create
+    assert "/nonexistent/source" not in create
 
 
 def test_run_container_ignores_devices(fake_smolvm):
@@ -544,6 +639,23 @@ def test_format_volume():
     assert (
         smolvm._format_volume({"source": "/a", "target": "/b", "options": "ro"})
         == "/a:/b:ro"
+    )
+
+
+def test_format_socket_mount():
+    assert (
+        smolvm._format_socket_mount(
+            {
+                "source": "/run/user/1000/keyring/ssh",
+                "target": "/run/user/1000/keyring/ssh",
+            }
+        )
+        == "/run/user/1000/keyring/ssh:/run/user/1000/keyring/ssh"
+    )
+    # options are ignored (no read-only socket mount in smolvm)
+    assert (
+        smolvm._format_socket_mount({"source": "/a", "target": "/b", "options": "ro"})
+        == "/a:/b"
     )
 
 

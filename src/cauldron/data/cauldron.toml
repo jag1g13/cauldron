@@ -17,6 +17,8 @@
 
 [container]
 # base_image = "docker.io/astral/uv:python3.14-trixie"
+# build_network = "host"  # builder --network for image builds (e.g. when container networking can't reach DNS)
+# network = "host"  # runtime --network for the project container (ports are discarded in host mode)
 # podman_socket = true  # use the host's Podman service (shares images and build cache)
 
 # mounts = [

@@ -141,10 +141,32 @@ def test_build_image_passes_build_args(fake_podman):
     ]
 
 
+def test_build_image_passes_build_network(fake_podman):
+    result = podman.build_image(
+        "cauldron-foo:latest",
+        "/path/Dockerfile",
+        "/context",
+        build_network="host",
+    )
+    assert result.returncode == 0
+    assert fake_podman.calls() == [
+        [
+            "build",
+            "-t",
+            "cauldron-foo:latest",
+            "-f",
+            "/path/Dockerfile",
+            "--network",
+            "host",
+            "/context",
+        ]
+    ]
+
+
 def test_build_project_image_generates_dockerfile(tmp_path):
     captured = {"args": None}
 
-    def capture_build(_tag, dockerfile, _context, build_args=None):
+    def capture_build(_tag, dockerfile, _context, build_args=None, build_network=None):
         captured["content"] = dockerfile.read_text()
         captured["args"] = build_args
         return True
@@ -165,7 +187,7 @@ def test_build_project_image_generates_dockerfile(tmp_path):
 def test_build_project_image_uses_configured_base():
     captured = {"args": None}
 
-    def capture_build(_tag, dockerfile, _context, build_args=None):
+    def capture_build(_tag, dockerfile, _context, build_args=None, build_network=None):
         captured["content"] = dockerfile.read_text()
         captured["args"] = build_args
         return True
@@ -184,6 +206,21 @@ def test_build_project_image_uses_configured_base():
         assert captured["args"] == {
             "CAULDRON_BASE": "cauldron-proj-intermediate:latest"
         }
+
+
+def test_build_project_image_passes_build_network():
+    captured = {"network": None}
+
+    def capture_build(_tag, dockerfile, _context, build_args=None, build_network=None):
+        captured["network"] = build_network
+        return True
+
+    with patch("cauldron.podman.build_image", side_effect=capture_build):
+        podman.build_project_image(
+            "cauldron-proj:latest", "1000", "1000", build_network="host"
+        )
+
+    assert captured["network"] == "host"
 
 
 def test_container_exists_checks_named_container(fake_podman):
@@ -295,7 +332,7 @@ def test_run_container_mounts_defaults(fake_podman):
 def test_build_project_image_owns_config_directory():
     dockerfile_content = []
 
-    def capture_build(_tag, dockerfile, _context, build_args=None):
+    def capture_build(_tag, dockerfile, _context, build_args=None, build_network=None):
         dockerfile_content.append(dockerfile.read_text())
         return True
 
@@ -389,6 +426,33 @@ def test_run_container_omits_devices_by_default(fake_podman):
     )
     args = fake_podman.calls()[0]
     assert "--device" not in args
+
+
+def test_run_container_passes_network(fake_podman):
+    podman.run_container(
+        name="cauldron-foo",
+        image="cauldron-foo:latest",
+        workdir="/home/deck/projects/foo",
+        project_dir="/home/deck/projects/foo",
+        uid="1000",
+        gid="1000",
+        network="host",
+    )
+    args = fake_podman.calls()[0]
+    index = args.index("--network")
+    assert args[index + 1] == "host"
+
+
+def test_run_container_omits_network_by_default(fake_podman):
+    podman.run_container(
+        name="cauldron-foo",
+        image="cauldron-foo:latest",
+        workdir="/home/deck/projects/foo",
+        project_dir="/home/deck/projects/foo",
+        uid="1000",
+        gid="1000",
+    )
+    assert "--network" not in fake_podman.calls()[0]
 
 
 def test_run_container_adds_known_hosts(fake_podman):
@@ -724,7 +788,7 @@ def test_find_port_owner_returns_empty_when_unowned(fake_podman):
 def test_build_project_image_copies_scripts_and_runs_post_build(tmp_path):
     captured = {"content": None, "args": None}
 
-    def capture_build(_tag, dockerfile, _context, build_args=None):
+    def capture_build(_tag, dockerfile, _context, build_args=None, build_network=None):
         captured["content"] = dockerfile.read_text()
         captured["args"] = build_args
         return True
@@ -766,7 +830,7 @@ def test_build_project_image_copies_scripts_and_runs_post_build(tmp_path):
 def test_build_project_image_copies_file_scripts(tmp_path):
     captured = {"content": None}
 
-    def capture_build(_tag, dockerfile, _context, build_args=None):
+    def capture_build(_tag, dockerfile, _context, build_args=None, build_network=None):
         captured["content"] = dockerfile.read_text()
         return True
 
@@ -795,7 +859,7 @@ def test_build_project_image_copies_file_scripts(tmp_path):
 def test_build_project_image_sets_entrypoint(tmp_path):
     captured = {"content": None}
 
-    def capture_build(_tag, dockerfile, _context, build_args=None):
+    def capture_build(_tag, dockerfile, _context, build_args=None, build_network=None):
         captured["content"] = dockerfile.read_text()
         return True
 

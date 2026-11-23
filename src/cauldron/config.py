@@ -401,6 +401,29 @@ def container_devices(config):
     return list(config.get("container", {}).get("devices", []))
 
 
+def container_build_network(config):
+    """Return the network for image builds, or None for the builder default.
+
+    The value is passed to the host builder's ``--network`` flag (for example
+    ``host``) so build steps can resolve DNS and reach the network when the
+    builder's default container networking cannot (e.g. inside a microVM
+    whose container networking is degraded).
+    """
+    value = config.get("container", {}).get("build_network")
+    return value if isinstance(value, str) and value else None
+
+
+def container_network(config):
+    """Return the network for the project container, or None for the default.
+
+    The value is passed to the container runtime's ``--network`` flag (for
+    example ``host``) when the runtime's own default networking cannot
+    resolve names or reach the network.
+    """
+    value = config.get("container", {}).get("network")
+    return value if isinstance(value, str) and value else None
+
+
 def container_known_hosts(config):
     """Return known-hosts entries for the container runtime.
 

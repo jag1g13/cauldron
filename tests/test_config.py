@@ -347,6 +347,28 @@ def test_container_devices_returns_empty_when_missing():
     assert config.container_devices({}) == []
 
 
+def test_container_build_network_returns_configured_value():
+    cfg = {"container": {"build_network": "host"}}
+    assert config.container_build_network(cfg) == "host"
+
+
+def test_container_build_network_defaults_to_none():
+    assert config.container_build_network({}) is None
+    assert config.container_build_network({"container": {}}) is None
+    assert config.container_build_network({"container": {"build_network": ""}}) is None
+
+
+def test_container_network_returns_configured_value():
+    cfg = {"container": {"network": "host"}}
+    assert config.container_network(cfg) == "host"
+
+
+def test_container_network_defaults_to_none():
+    assert config.container_network({}) is None
+    assert config.container_network({"container": {}}) is None
+    assert config.container_network({"container": {"network": ""}}) is None
+
+
 def test_load_config_merges_known_hosts_by_hostname(tmp_path, monkeypatch):
     global_file = tmp_path / "home" / "cauldron.toml"
     global_file.parent.mkdir()

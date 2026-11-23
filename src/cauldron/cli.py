@@ -305,6 +305,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     base_image = config.base_image(cfg)
     scripts = config.container_scripts(cfg)
     podman_socket = config.container_podman_socket(cfg)
+    build_network = config.container_build_network(cfg)
     has_entrypoint = "entrypoint" in scripts
 
     if backend.active().container_exists(container):
@@ -381,6 +382,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 dockerfile,
                 dockerfile.parent,
                 build_args={"CAULDRON_BASE": resolved_base},
+                build_network=build_network,
             )
             if result.returncode != 0:
                 new_base = _recover_template_base(result, resolved_base, project_dir)
@@ -393,6 +395,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                         dockerfile,
                         dockerfile.parent,
                         build_args={"CAULDRON_BASE": new_base},
+                        build_network=build_network,
                     )
                 if result.returncode != 0:
                     raise click.ClickException(
@@ -408,6 +411,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             project_base,
             scripts=scripts,
             project_dir=project_dir,
+            build_network=build_network,
         )
         if not _build_ok(result):
             new_base = _recover_template_base(result, project_base, project_dir)
@@ -422,6 +426,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                     new_base,
                     scripts=scripts,
                     project_dir=project_dir,
+                    build_network=build_network,
                 )
             if not _build_ok(result):
                 raise click.ClickException(
@@ -472,6 +477,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         podman_client=client_path,
         entrypoint=has_entrypoint,
         nested=config.backend_smolvm_nested(cfg),
+        network=config.container_network(cfg),
     )
     if result.returncode != 0:
         raise click.ClickException(

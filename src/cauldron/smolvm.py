@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import warnings
 
 from cauldron import imagebuild
 from cauldron.project import DEFAULT_CONTAINER_PREFIX
@@ -113,8 +114,12 @@ def _host_builder():
     return None
 
 
-def _builder_build(tag, dockerfile, context, build_args=None):
-    """Build an image with the host builder and tag it."""
+def _builder_build(tag, dockerfile, context, build_args=None, build_network=None):
+    """Build an image with the host builder and tag it.
+
+    ``build_network`` is an optional value for the builder's ``--network``
+    flag (for example ``host``), accepted by both podman and docker.
+    """
     builder = _host_builder()
     if builder is None:
         return subprocess.CompletedProcess(
@@ -124,6 +129,8 @@ def _builder_build(tag, dockerfile, context, build_args=None):
             stderr="no host builder (podman or docker) found to build the project image",
         )
     args = [builder, "build", "-t", tag, "-f", str(dockerfile)]
+    if build_network:
+        args.extend(["--network", build_network])
     for key, value in (build_args or {}).items():
         args.extend(["--build-arg", f"{key}={value}"])
     args.append(str(context))
@@ -260,16 +267,26 @@ def run_test_container(base_image=None):
     )
 
 
-def build_image(tag, dockerfile, context, build_args=None):
-    """Build an image from a Dockerfile with the host builder and tag it."""
-    return _builder_build(tag, dockerfile, context, build_args=build_args)
+def build_image(tag, dockerfile, context, build_args=None, build_network=None):
+    """Build an image from a Dockerfile with the host builder and tag it.
+
+    ``build_network`` is an optional value for the builder's ``--network``
+    flag (for example ``host``).
+    """
+    return _builder_build(
+        tag, dockerfile, context, build_args=build_args, build_network=build_network
+    )
 
 
-def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_dir=None):
+def build_project_image(
+    tag, uid, gid, base_image=None, scripts=None, project_dir=None, build_network=None
+):
     """Build the final project image and export it as a docker-save tar.
 
     The image is built with the host builder (base image supplied through the
     ``CAULDRON_BASE`` build argument) and then saved to :func:`image_tar_path`.
+    ``build_network`` is an optional value for the builder's ``--network``
+    flag (for example ``host``).
     Returns the ``CompletedProcess`` of the (last) step; check ``returncode``.
     """
     base = base_image or BASE_IMAGE
@@ -279,7 +296,11 @@ def build_project_image(tag, uid, gid, base_image=None, scripts=None, project_di
             tmpdir, uid, gid, base, scripts, project_dir
         )
         result = _builder_build(
-            tag, tmpdir / "Dockerfile", tmpdir, build_args=build_args
+            tag,
+            tmpdir / "Dockerfile",
+            tmpdir,
+            build_args=build_args,
+            build_network=build_network,
         )
     if result.returncode == 0:
         result = _builder_save(tag, image_tar_path(tag))
@@ -353,6 +374,15 @@ def _format_volume(mount):
     return f"{mount['source']}:{mount['target']}{suffix}"
 
 
+def _format_socket_mount(mount):
+    """Format a normalized mount dict as a smolvm ``--mount-socket`` argument.
+
+    smolvm has no read-only form for socket mounts, so ``options`` are
+    ignored.
+    """
+    return f"{mount['source']}:{mount['target']}"
+
+
 def _format_port(port):
     """Translate a Podman ``-p`` spec to a smolvm ``host:guest[/proto]`` spec.
 
@@ -388,13 +418,18 @@ def run_container(
     podman_client=None,
     entrypoint=False,
     nested=False,
+    network=None,
 ):
     """Create and start a named machine from the built image tar.
 
     ``image`` is the project image tag; it is resolved to its docker-save tar.
-    ``devices``, ``podman_socket`` and ``podman_client`` are Podman-specific
-    and ignored. ``nested`` passes smolvm's ``--nested`` so the guest can
-    run its own VMs on its own /dev/kvm.
+    ``devices``, ``network``, ``podman_socket`` and ``podman_client`` are
+    Podman-specific and ignored. ``nested`` passes smolvm's ``--nested`` so
+    the guest can run its own VMs on its own /dev/kvm. Configured mounts are
+    classified by their source path: Unix sockets go through
+    ``--mount-socket``, directories through virtiofs ``-v`` (honouring
+    ``ro``), and anything else (plain files, missing paths) is skipped with
+    a warning, as virtiofs cannot share them.
 
     Returns the ``CompletedProcess`` of the start; check ``returncode``.
     """
@@ -412,7 +447,16 @@ def run_container(
 
     args.extend(["-v", f"{project_dir}:{project_dir}"])
     for mount in mounts or []:
-        args.extend(["-v", _format_volume(mount)])
+        source = pathlib.Path(mount["source"])
+        if source.is_socket():
+            args.extend(["--mount-socket", _format_socket_mount(mount)])
+        elif source.is_dir():
+            args.extend(["-v", _format_volume(mount)])
+        else:
+            warnings.warn(
+                f"Skipping mount {mount['source']!r}: smolvm can only mount "
+                "directories (virtiofs) and sockets"
+            )
     for port in ports or []:
         args.extend(["-p", _format_port(port)])
 
