@@ -11,6 +11,7 @@ import subprocess
 from contextlib import ExitStack
 from unittest.mock import patch
 
+import pytest
 from click.testing import CliRunner
 
 from cauldron import podman_remote
@@ -1163,6 +1164,77 @@ def test_up_nested_reuses_host_mounts_and_applies_project_env(
     # values resolving to the inherited host path.
     assert "SSH_AUTH_SOCK=/run/user/1000/keyring/ssh" in run_calls[0]
     assert "EDITOR=vim" in run_calls[0]
+
+
+def test_up_nested_resolves_ssh_from_parent_env_when_unset_in_shell(
+    fake_podman, monkeypatch, tmp_path
+):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text(
+        '[container]\npodman_socket = true\n\n[env]\nSSH_AUTH_SOCK = "$SSH_AUTH_SOCK"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    # The shell running here does not carry SSH_AUTH_SOCK ...
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_is_running(fake_podman)
+
+    with (
+        patch("cauldron.podman_remote.running_in_remote", return_value=True),
+        patch(
+            "cauldron.podman_remote.host_backend_paths",
+            return_value=(
+                "/run/user/1000/podman/podman.sock",
+                "/home/host/.cache/cauldron/podman-remote/5.4.2/podman",
+            ),
+        ),
+        patch("cauldron.podman_remote.host_sibling_mounts", return_value=[]),
+        # ... but the parent container's env does, so the sibling inherits it.
+        patch(
+            "cauldron.podman_remote.nested_environ",
+            return_value={"SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh"},
+        ),
+    ):
+        result = invoke(["up"])
+
+    assert result.exit_code == 0
+    run_calls = [call for call in fake_podman.calls() if call[0] == "run"]
+    assert "SSH_AUTH_SOCK=/run/user/1000/keyring/ssh" in run_calls[0]
+
+
+def test_up_non_nested_skips_unset_ssh_mount_and_env(
+    fake_podman, monkeypatch, tmp_path
+):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text(
+        "[container]\n"
+        "mounts = [\n"
+        '  {source = "$SSH_AUTH_SOCK", target = "$SSH_AUTH_SOCK", options = "ro"},\n'
+        "]\n"
+        "\n"
+        "[env]\n"
+        'SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"\n'
+    )
+    monkeypatch.chdir(tmp_path)
+    # No SSH agent in the environment, so the reference cannot be expanded.
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    containers_exist(fake_podman, returncode=1)
+    fake_podman.respond(["image", "exists"], returncode=0)
+    container_is_running(fake_podman)
+
+    with (
+        patch("cauldron.podman_remote.running_in_remote", return_value=False),
+        pytest.warns(UserWarning, match="SSH_AUTH_SOCK"),
+    ):
+        result = invoke(["up"])
+
+    assert result.exit_code == 0
+    run_calls = [call for call in fake_podman.calls() if call[0] == "run"]
+    # No bogus mount or env is created from the unresolved variable.
+    assert not any("$SSH_AUTH_SOCK" in arg for arg in run_calls[0])
 
 
 def test_up_reports_missing_podman_socket(fake_podman, monkeypatch, tmp_path):

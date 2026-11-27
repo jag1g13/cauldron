@@ -316,3 +316,32 @@ def host_sibling_mounts(project_dir):
             }
         )
     return mounts
+
+
+def parent_env():
+    """Return the current cauldron's configured environment as a dict.
+
+    The parent's ``Config.Env`` holds the real host-resource values (e.g. the
+    absolute ``SSH_AUTH_SOCK`` path) that the host bind-mounted into it. The
+    shell cauldron is running in may not carry those values, so reading them
+    from the parent rather than re-resolving them in-container keeps a sibling
+    wired to the same host resources.
+    """
+    cid = _container_id()
+    if not cid:
+        return {}
+    return podman.container_config_env(cid)
+
+
+def nested_environ():
+    """Return an env mapping for expanding config host variables in the nested case.
+
+    Starts from the current (container) environment and fills in any variable
+    the parent container set, so host-resource references such as
+    ``$SSH_AUTH_SOCK`` resolve to the paths inherited from the parent. Variables
+    already set in the current environment take precedence.
+    """
+    environ = dict(os.environ)
+    for key, value in parent_env().items():
+        environ.setdefault(key, value)
+    return environ

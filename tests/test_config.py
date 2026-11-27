@@ -238,6 +238,92 @@ def test_container_env_does_not_expand_path(monkeypatch):
     assert config.container_env(cfg) == {"PATH": "/home/cauldron/.local/bin:${PATH}"}
 
 
+def test_container_mounts_skips_unset_source_var(monkeypatch):
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    cfg = {
+        "container": {
+            "mounts": [
+                {
+                    "source": "$SSH_AUTH_SOCK",
+                    "target": "$SSH_AUTH_SOCK",
+                    "options": "ro",
+                },
+                {"source": "/a", "target": "/b", "options": "ro"},
+            ]
+        }
+    }
+    with pytest.warns(UserWarning, match="SSH_AUTH_SOCK"):
+        mounts = config.container_mounts(cfg)
+    # The mount referencing the unset variable is skipped; the valid one is kept.
+    assert mounts == [{"source": "/a", "target": "/b", "options": "ro"}]
+
+
+def test_container_mounts_skips_unset_target_var(monkeypatch):
+    monkeypatch.delenv("MY_VAR", raising=False)
+    cfg = {
+        "container": {
+            "mounts": [{"source": "/a", "target": "$MY_VAR", "options": "ro"}]
+        }
+    }
+    with pytest.warns(UserWarning, match="MY_VAR"):
+        assert config.container_mounts(cfg) == []
+
+
+def test_container_mounts_skips_empty_source(monkeypatch):
+    monkeypatch.setenv("EMPTY_VAR", "")
+    cfg = {
+        "container": {
+            "mounts": [{"source": "$EMPTY_VAR", "target": "/b", "options": "ro"}]
+        }
+    }
+    with pytest.warns(UserWarning, match="non-empty"):
+        assert config.container_mounts(cfg) == []
+
+
+def test_container_mounts_expands_with_environ_override(monkeypatch):
+    # Unset in os.environ but present in the supplied mapping, so the mount is
+    # kept and expanded from that mapping.
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    cfg = {
+        "container": {
+            "mounts": [
+                {
+                    "source": "$SSH_AUTH_SOCK",
+                    "target": "$SSH_AUTH_SOCK",
+                    "options": "ro",
+                }
+            ]
+        }
+    }
+    mounts = config.container_mounts(
+        cfg, environ={"SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh"}
+    )
+    assert mounts == [
+        {
+            "source": "/run/user/1000/keyring/ssh",
+            "target": "/run/user/1000/keyring/ssh",
+            "options": "ro",
+        }
+    ]
+
+
+def test_container_env_skips_unset_var(monkeypatch):
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    cfg = {"env": {"SSH_AUTH_SOCK": "$SSH_AUTH_SOCK", "EDITOR": "vim"}}
+    with pytest.warns(UserWarning, match="SSH_AUTH_SOCK"):
+        env = config.container_env(cfg)
+    assert env == {"EDITOR": "vim"}
+
+
+def test_container_env_expands_with_environ_override(monkeypatch):
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    cfg = {"env": {"SSH_AUTH_SOCK": "$SSH_AUTH_SOCK"}}
+    env = config.container_env(
+        cfg, environ={"SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh"}
+    )
+    assert env == {"SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh"}
+
+
 def test_load_config_merges_container_ports(tmp_path, monkeypatch):
     global_file = tmp_path / "home" / "cauldron.toml"
     global_file.parent.mkdir()

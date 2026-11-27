@@ -281,6 +281,42 @@ def test_host_sibling_mounts_reuses_host_paths_and_skips_managed(monkeypatch):
     ]
 
 
+def test_parent_env_reads_container_config_env(monkeypatch):
+    monkeypatch.setattr("cauldron.podman_remote._container_id", lambda: "abc")
+    monkeypatch.setattr(
+        "cauldron.podman.container_config_env",
+        lambda name: {
+            "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+            "HOME": "/home/cauldron",
+        },
+    )
+    assert podman_remote.parent_env() == {
+        "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+        "HOME": "/home/cauldron",
+    }
+
+
+def test_parent_env_empty_when_container_id_unknown(monkeypatch):
+    monkeypatch.setattr("cauldron.podman_remote._container_id", lambda: None)
+    assert podman_remote.parent_env() == {}
+
+
+def test_nested_environ_fills_unset_from_parent(monkeypatch):
+    # SSH_AUTH_SOCK is absent from the current (container) environment but
+    # present in the parent's; PATH is set in both, so the current value wins.
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setenv("PATH", "/current/bin")
+    monkeypatch.setattr(
+        "cauldron.podman_remote.parent_env",
+        lambda: {"SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh", "PATH": "/parent/bin"},
+    )
+
+    environ = podman_remote.nested_environ()
+
+    assert environ["SSH_AUTH_SOCK"] == "/run/user/1000/keyring/ssh"
+    assert environ["PATH"] == "/current/bin"
+
+
 @pytest.mark.integration
 def test_host_backend_paths_match_live_container_mounts(podman_service):
     if not podman_remote.running_in_remote():

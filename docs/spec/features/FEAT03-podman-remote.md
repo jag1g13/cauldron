@@ -127,10 +127,15 @@ so the sibling reuses the current container's actual host->container mounts
 therefore has the same host resource access as its parent.
 
 The environment is different: it is always the requested project's own `[env]`
-config, not the parent's. Re-expanding it in-container is safe because the
-host-resource values it references (e.g. `$SSH_AUTH_SOCK`) already hold the real
-host paths inherited from the parent, and the target image's defaults (such as
-`PATH`) are left intact instead of being replaced by the parent's values.
+config, not the parent's. Those entries are expanded against an environment
+seeded from the parent container's real `Config.Env`, so host-resource values
+they reference (e.g. `$SSH_AUTH_SOCK`) resolve to the host paths the parent
+inherited even when the shell running inside the container does not carry
+them; variables already set in the current environment take precedence, and the
+target image's defaults (such as `PATH`) are left intact instead of being
+replaced by the parent's values. A reference that is still unresolved after
+this (no agent on the host) is skipped with a warning, matching the non-nested
+behaviour.
 
 The current container id is taken from `CAULDRON_CONTAINER_ID` (an override for
 when it cannot be inferred), then the `HOSTNAME` environment variable, then the

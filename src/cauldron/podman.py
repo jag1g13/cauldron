@@ -439,6 +439,31 @@ def container_mounts(name):
     return mounts
 
 
+def container_config_env(name):
+    """Return a container's configured environment as a dict, or {} if unreadable.
+
+    Reads the ``Config.Env`` list (``KEY=VALUE`` strings) as reported by
+    ``podman container inspect``, mirroring :func:`image_env`.
+    """
+    result = _run(
+        ["container", "inspect", "-f", "{{json .Config.Env}}", name], quiet=True
+    )
+    if result.returncode != 0:
+        return {}
+    try:
+        env_list = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(env_list, dict):
+        env_list = [env_list]
+    env = {}
+    for item in env_list or []:
+        if isinstance(item, str) and "=" in item:
+            key, value = item.split("=", 1)
+            env[key] = value
+    return env
+
+
 def stop_container(name):
     """Stop a running container. Returns True on success."""
     return _run(["stop", name]).returncode == 0
