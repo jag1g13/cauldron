@@ -504,7 +504,10 @@ def run_container(
         hostname, _, ip = entry.partition(":")
         if hostname and ip:
             args.extend(
-                ["--init", f"echo {shlex.quote(ip)} {shlex.quote(hostname)} >> /etc/hosts"]
+                [
+                    "--init",
+                    f"echo {shlex.quote(ip)} {shlex.quote(hostname)} >> /etc/hosts",
+                ]
             )
 
     # The machine's long-lived workload keeps it running. When the image has a
