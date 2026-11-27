@@ -53,14 +53,34 @@ if ! command -v apt-get >/dev/null; then
 fi
 
 # Postinst hooks must not try to start the daemon: there is no systemd here.
+# policy-rc.d gates whether maintainer scripts start services on install. If
+# one already exists, preserve it and restore it on exit; otherwise remove
+# ours. The EXIT trap covers both a clean finish and an interrupted install
+# (set -e), so a stray guard never blocks later service starts.
+policy_rcd=/usr/sbin/policy-rc.d
+had_policy_rcd=0
+if [ -e "$policy_rcd" ]; then
+    had_policy_rcd=1
+fi
+cleanup_policy_rcd() {
+    if [ "$had_policy_rcd" -eq 1 ]; then
+        mv -f "$policy_rcd.restore" "$policy_rcd"
+    else
+        rm -f "$policy_rcd"
+    fi
+}
+trap cleanup_policy_rcd EXIT
+
 echo "== guarding service start during install (policy-rc.d)"
-printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
-chmod 0755 /usr/sbin/policy-rc.d
+if [ "$had_policy_rcd" -eq 1 ]; then
+    cp -a "$policy_rcd" "$policy_rcd.restore"
+fi
+printf '#!/bin/sh\nexit 101\n' > "$policy_rcd"
+chmod 0755 "$policy_rcd"
 
 echo "== installing packages"
 apt-get update -qq
 apt-get install -y -qq docker.io docker-compose fuse-overlayfs
-rm -f /usr/sbin/policy-rc.d
 
 for bin in dockerd docker fuse-overlayfs; do
     command -v "$bin" >/dev/null 2>&1 || {

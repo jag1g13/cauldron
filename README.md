@@ -211,7 +211,7 @@ devices = [
 ]
 ```
 
-Each entry is passed to Podman's `--device` flag. Use this instead of a mount for device nodes: under rootless Podman a bind-mounted device shows up owned by `nobody:nogroup`, while `--device` hands it to the container user. Project entries override global entries for the same host path.
+Each entry is passed to Podman's `--device` flag. A device node's access is governed by its permissions on the host (ownership plus any named ACL), not by how it reaches the container — `--device` and a plain bind mount behave the same way. Grant the container user access on the host first, for example by adding it to the `kvm` group or setting a named ACL (`setfacl -m u:<uid>:rw /dev/kvm`). Project entries override global entries for the same host path.
 
 ### Known hosts
 

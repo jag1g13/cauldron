@@ -138,10 +138,17 @@ def ensure_ssh_config(container):
 def ensure_remote_ssh(container):
     """Set up Remote-SSH for a container: host key pair, in-container sshd, and
     the SSH config. Idempotent. Raises SSHError if any step fails.
+
+    Filesystem failures (key-directory creation, config reads/writes) are
+    normalised to ``SSHError`` so callers can treat every setup failure
+    uniformly instead of a raw ``OSError`` surfacing.
     """
-    ensure_keypair()
-    ensure_container_ssh(container)
-    ensure_ssh_config(container)
+    try:
+        ensure_keypair()
+        ensure_container_ssh(container)
+        ensure_ssh_config(container)
+    except OSError as exc:
+        raise SSHError(f"SSH setup failed: {exc}") from exc
 
 
 def _update_managed_file(path, begin_marker, end_marker, content):

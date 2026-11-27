@@ -34,9 +34,12 @@ nested = true
 Passes smolvm's `--nested` on `machine create`, giving the guest its own
 `/dev/kvm` so it can run VMs itself (for example a Cauldron inside the
 machine using the smolvm backend). Off by default; the host must support
-nested KVM or smolvm fails the machine start cleanly. The workload user in
-the guest is unprivileged, so grant the guest's device access from a
-lifecycle `init` script (init scripts run as root in the guest).
+nested KVM or smolvm fails the machine start cleanly. The guest's workload
+user is unprivileged and cannot open `/dev/kvm` until it is granted access,
+so do that after the machine starts, as root, with a command into the guest —
+for example `smolvm machine exec --name <machine> --user 0 -- sh -c
+'setfacl -m u:$(id -u cauldron):rw /dev/kvm'` (or `chmod`/group the node if
+the image lacks `setfacl`).
 
 ### `[container]` — container runtime options
 
@@ -184,7 +187,7 @@ devices = [
 
 The short form is a host device path (e.g. `/dev/kvm`); the long form is `host-path:container-path:permissions`, where permissions are `r`, `w`, and `m` combinations. Entries are passed to Podman's `--device` flag. Global and project devices are merged by host path: a project entry for the same host path overrides the global one and Cauldron emits a warning.
 
-This matters under rootless Podman: `--device` arranges the device node's ownership for the container's user namespace, whereas a plain bind mount of `/dev/<node>` shows up owned by `nobody:nogroup` and is not usable by the container user. Use `devices` rather than a `mounts` entry for host device nodes.
+Access to a device node is governed by its permissions on the host (ownership plus any named ACL), not by how it reaches the container: under rootless Podman `--device` and a plain bind mount behave the same way. Grant the container user access on the host first — for example by adding it to the relevant group or setting a named ACL (`setfacl -m u:<uid>:rw /dev/kvm`) — and use `devices` rather than a `mounts` entry to make the node available.
 
 #### `known_hosts`
 

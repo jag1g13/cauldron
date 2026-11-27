@@ -8,6 +8,7 @@ which is pointed at the same fake for these tests.
 
 import json
 import os
+import pathlib
 import socket
 
 import pytest
@@ -116,9 +117,24 @@ def test_ensure_base_image_pulls_with_builder(fake_smolvm, monkeypatch):
     monkeypatch.setattr(
         smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
     )
+    # the base image is not in the store, so it is pulled
+    fake_smolvm.respond(["image", "inspect"], returncode=1)
     fake_smolvm.respond(["pull"], returncode=0)
     assert smolvm.ensure_base_image("base:img") is True
-    assert fake_smolvm.calls() == [["pull", "base:img"]]
+    assert fake_smolvm.calls() == [
+        ["image", "inspect", "base:img"],
+        ["pull", "base:img"],
+    ]
+
+
+def test_ensure_base_image_skips_pull_when_present(fake_smolvm, monkeypatch):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    # the base image is already in the store, so it is not pulled
+    fake_smolvm.respond(["image", "inspect"], returncode=0)
+    assert smolvm.ensure_base_image("base:img") is True
+    assert fake_smolvm.calls() == [["image", "inspect", "base:img"]]
 
 
 def test_ensure_base_image_false_without_builder(monkeypatch):
@@ -200,11 +216,15 @@ def test_build_project_image_builds_and_saves_tar(fake_smolvm, monkeypatch):
     assert save_calls[0][-1] == "cauldron-foo:latest"
 
     final = smolvm.image_tar_path("cauldron-foo:latest")
-    tmp = final.with_name(f"{final.name}.tmp")
-    # The export targets a fresh sibling that is then renamed into place.
-    assert save_calls[0][2] == str(tmp)
+    # The export targets a unique fresh sibling (mkstemp) that is renamed into
+    # place; assert the shape and that the temp is gone afterwards.
+    export_tmp = pathlib.Path(save_calls[0][2])
+    assert export_tmp.parent == final.parent
+    assert export_tmp.name.startswith(f".{final.name}.")
+    assert export_tmp.name.endswith(".tmp")
+    assert export_tmp != final
     assert final.exists()
-    assert not tmp.exists()
+    assert not export_tmp.exists()
 
 
 def test_build_project_image_overwrites_stale_tar(fake_smolvm, monkeypatch):
@@ -223,7 +243,8 @@ def test_build_project_image_overwrites_stale_tar(fake_smolvm, monkeypatch):
     )
     assert result.returncode == 0
     assert final.read_bytes() == b"fake-image-archive"
-    assert not final.with_name(f"{final.name}.tmp").exists()
+    # no stray temp export is left behind
+    assert not list(final.parent.glob(f".{final.name}.*.tmp"))
 
 
 def test_container_exists(fake_smolvm):
@@ -472,7 +493,6 @@ def test_run_container_returns_create_failure(fake_smolvm):
 def test_run_container_appends_known_hosts(fake_smolvm):
     fake_smolvm.respond(["machine", "create"], returncode=0)
     fake_smolvm.respond(["machine", "start"], returncode=0)
-    fake_smolvm.respond(["machine", "exec"], returncode=0)
     smolvm.run_container(
         "cauldron-foo",
         "cauldron-foo:latest",
@@ -482,12 +502,15 @@ def test_run_container_appends_known_hosts(fake_smolvm):
         1000,
         known_hosts=["example.com:1.2.3.4"],
     )
-    exec_calls = [c for c in fake_smolvm.calls() if c[:2] == ["machine", "exec"]]
-    assert exec_calls
-    # config entries ("hostname:ip") become valid hosts(5) lines ("ip hostname")
-    assert "1.2.3.4 example.com" in exec_calls[0][-1]
-    assert "example.com:1.2.3.4" not in exec_calls[0][-1]
-    assert exec_calls[0][0] == "machine"
+    create = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "create"])
+    # mapping is installed at create time, before the workload (mirroring
+    # Podman's --add-host), as a --init hosts(5) line ("ip hostname")
+    assert "--init" in create
+    init_cmd = create[create.index("--init") + 1]
+    assert "1.2.3.4 example.com" in init_cmd
+    assert "example.com:1.2.3.4" not in init_cmd
+    # no post-start exec writes /etc/hosts anymore
+    assert not [c for c in fake_smolvm.calls() if c[:2] == ["machine", "exec"]]
 
 
 def test_start_stop_restart_remove(fake_smolvm):

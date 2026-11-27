@@ -27,18 +27,17 @@ source tree is changed.**
 ```bash
 cd spike/smolvm-backend
 
-./spike.sh              # tiers 0–2 and 4 (non-interactive)
 ./ssh-test.sh           # tier 3 (VSCode Remote-SSH end-to-end)
 ```
 
-Options:
+The primary `spike.sh` runner (tiers 0–2 and 4) and its `diag-smolvm-build.sh`
+helper were removed once the behaviour they validated landed in
+`src/cauldron/smolvm.py`; the results are captured in `RESULTS.md` and the
+`RESULTS-*.md` notes.
 
-- `--keep` — leave the machines running after the run (for manual inspection).
-- `SMOLVM_BIN=smol ./spike.sh` — use a differently-named binary.
-
-Everything is safe to re-run. Every machine the spike creates uses the
-`cauldron-spike-` name prefix and is removed on exit (unless `--keep`). Only
-`/tmp` (and this directory for the result files) are touched.
+Everything is safe to re-run. Every machine a script creates uses the
+`cauldron-spike-` name prefix and is removed on exit (unless the script's
+`--keep`). Only `/tmp` (and this directory for the result files) are touched.
 
 ## What it writes
 

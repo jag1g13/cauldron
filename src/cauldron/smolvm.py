@@ -155,13 +155,23 @@ def _builder_save(tag, dest):
         )
     dest = pathlib.Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(f"{dest.name}.tmp")
-    result = _run([builder, "save", "-o", str(tmp), tag])
-    if result.returncode == 0:
-        os.replace(tmp, dest)
-    elif tmp.exists():
-        tmp.unlink()
-    return result
+    # Export to a unique, initially nonexistent path on the destination
+    # filesystem (avoids the fixed name colliding with a stale or concurrent
+    # export), then rename it into place atomically; clean the temp up on
+    # failure.
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{dest.name}.", suffix=".tmp", dir=str(dest.parent)
+    )
+    os.close(fd)
+    tmp = pathlib.Path(tmp_name)
+    try:
+        result = _run([builder, "save", "-o", str(tmp), tag])
+        if result.returncode == 0:
+            os.replace(tmp, dest)
+        return result
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def image_tar_path(tag):
@@ -247,12 +257,31 @@ def image_exists(tag):
     return image_tar_path(tag).exists()
 
 
+def _base_image_exists(base):
+    """Return True if the base image is present in the host builder's store.
+
+    Both ``podman`` and ``docker`` accept ``image inspect``, which succeeds
+    only when the image is already present.
+    """
+    builder = _host_builder()
+    if builder is None:
+        return False
+    return _run([builder, "image", "inspect", base], quiet=True).returncode == 0
+
+
 def ensure_base_image(base_image=None):
-    """Ensure the base image is available to the host builder (pull if needed)."""
+    """Ensure the base image is available to the host builder (pull if needed).
+
+    Mirrors the Podman backend: the image is pulled only when it is not already
+    present in the host builder's local store, so a locally built base tag
+    works and cached registry images are usable offline.
+    """
     base = base_image or BASE_IMAGE
     builder = _host_builder()
     if builder is None:
         return False
+    if _base_image_exists(base):
+        return True
     return _run([builder, "pull", base]).returncode == 0
 
 
@@ -466,6 +495,18 @@ def run_container(
     for key, value in env.items():
         args.extend(["-e", f"{key}={value}"])
 
+    # known_hosts: smolvm has no --add-host, so write each hostname->ip mapping
+    # into the guest /etc/hosts before the workload starts, mirroring Podman's
+    # create-time --add-host. Config entries are "hostname:ip"; hosts(5) lines
+    # are "ip hostname". A failing --init fails the machine start, so a broken
+    # mapping fails `cauldron up` instead of reporting success.
+    for entry in known_hosts or []:
+        hostname, _, ip = entry.partition(":")
+        if hostname and ip:
+            args.extend(
+                ["--init", f"echo {shlex.quote(ip)} {shlex.quote(hostname)} >> /etc/hosts"]
+            )
+
     # The machine's long-lived workload keeps it running. When the image has a
     # custom entrypoint (from an ``entrypoint`` lifecycle script) it is used;
     # otherwise sleep so the machine stays up for exec/shell.
@@ -479,25 +520,6 @@ def run_container(
     result = _smolvm(["machine", "start", "--name", name])
     if result.returncode != 0:
         return result
-
-    # known_hosts: no native smolvm support, so append to the guest /etc/hosts.
-    # Config entries are "hostname:ip"; hosts(5) lines are "ip hostname".
-    for entry in known_hosts or []:
-        hostname, _, ip = entry.partition(":")
-        _smolvm(
-            [
-                "machine",
-                "exec",
-                "--name",
-                name,
-                "--user",
-                "0",
-                "--",
-                "sh",
-                "-c",
-                f"echo {shlex.quote(ip)} {shlex.quote(hostname)} >> /etc/hosts",
-            ]
-        )
     return result
 
 
