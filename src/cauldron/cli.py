@@ -20,7 +20,12 @@ def cli(ctx, verbose):
     """Cauldron — containerised development environments with rootless Podman."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
-    backend.active().set_verbose(verbose)
+    try:
+        backend.active().set_verbose(verbose)
+    except ValueError as exc:
+        # A malformed backend type would otherwise surface as a raw traceback
+        # out of this group callback; turn it into a clean configuration error.
+        raise click.ClickException(str(exc)) from exc
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 

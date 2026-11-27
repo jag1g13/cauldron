@@ -352,6 +352,22 @@ def test_check_verifies_kvm_access_for_smolvm_backend(
     assert "All checks passed." in result.output
 
 
+def test_invalid_backend_type_is_a_clean_error(tmp_path, monkeypatch):
+    # A typo'd backend type must surface as a clean configuration error, not an
+    # uncaught traceback out of the group callback.
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvmx"\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = invoke([])
+
+    assert result.exit_code != 0
+    assert "Unknown backend type" in result.output
+    assert "smolvmx" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_check_reports_kvm_permission_hint_for_smolvm_backend(
     fake_smolvm, monkeypatch, tmp_path
 ):

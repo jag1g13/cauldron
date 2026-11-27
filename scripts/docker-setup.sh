@@ -124,9 +124,16 @@ cat > /usr/local/bin/docker-start <<'START'
 set -eu
 
 pidfile=/run/docker.pid
-if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-    echo "docker already running (pid $(cat "$pidfile"))"
-    exit 0
+# A live PID only counts if it is actually dockerd; a stale pidfile can point
+# at an unrelated process that reused the number, which would mask a real start.
+if [ -f "$pidfile" ]; then
+    oldpid="$(cat "$pidfile" 2>/dev/null)"
+    if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null \
+        && [ -r "/proc/$oldpid/comm" ] \
+        && [ "$(cat "/proc/$oldpid/comm" 2>/dev/null)" = "dockerd" ]; then
+        echo "docker already running (pid $oldpid)"
+        exit 0
+    fi
 fi
 
 # setsid: detach from the invoking terminal (no init to adopt us into).
@@ -162,6 +169,13 @@ pid="$(cat "$pidfile")"
 if ! kill -0 "$pid" 2>/dev/null; then
     rm -f "$pidfile"
     echo "not running (removed stale pidfile)"
+    exit 0
+fi
+# A live PID only counts if it is actually dockerd; never signal an unrelated
+# process that reused a number from a stale pidfile.
+if [ ! -r "/proc/$pid/comm" ] || [ "$(cat "/proc/$pid/comm" 2>/dev/null)" != "dockerd" ]; then
+    rm -f "$pidfile"
+    echo "pid $pid is not dockerd (stale pidfile); removed, not stopping" >&2
     exit 0
 fi
 

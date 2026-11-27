@@ -636,11 +636,13 @@ def stop_container(name):
 def remove_container(name, force=False):
     """Remove a machine. Returns True on success.
 
-    ``--force`` is always passed: smolvm asks for confirmation when stdin is
-    not a terminal and refuses the delete without it — even for stopped
-    machines. Cauldron is always non-interactive and the CLI already guards
-    removing running machines unless the user passes ``--force``.
+    smolvm requires ``--force`` to delete non-interactively (even a stopped
+    machine), but that same flag also deletes a *running* one. To preserve the
+    backend contract shared with Podman, a running machine is refused unless the
+    caller explicitly passes ``force``; the flag is still always sent to smolvm.
     """
+    if not force and container_running(name):
+        return False
     return _smolvm(["machine", "delete", "--name", name, "--force"]).returncode == 0
 
 

@@ -579,7 +579,9 @@ def test_start_stop_restart_remove(fake_smolvm):
     assert smolvm.start_container("cauldron-foo").returncode == 0
     assert smolvm.stop_container("cauldron-foo") is True
     assert smolvm.restart_container("cauldron-foo").returncode == 0
-    assert smolvm.remove_container("cauldron-foo") is True
+    # force=False refuses to remove a running machine (the Podman contract);
+    # force=True does.
+    assert smolvm.remove_container("cauldron-foo") is False
     assert smolvm.remove_container("cauldron-foo", force=True) is True
 
     calls = fake_smolvm.calls()
@@ -588,8 +590,20 @@ def test_start_stop_restart_remove(fake_smolvm):
     delete_calls = [c for c in calls if c[:2] == ["machine", "delete"]]
     assert delete_calls == [
         ["machine", "delete", "--name", "cauldron-foo", "--force"],
-        ["machine", "delete", "--name", "cauldron-foo", "--force"],
     ]
+
+
+def test_remove_container_stopped_without_force(fake_smolvm):
+    # A stopped machine can be removed without force; smolvm's --force flag is
+    # still sent (required for non-interactive deletion).
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(_machine("cauldron-foo", state="stopped")),
+    )
+    fake_smolvm.respond(["machine", "delete"], returncode=0)
+    assert smolvm.remove_container("cauldron-foo") is True
+    calls = [c for c in fake_smolvm.calls() if c[:2] == ["machine", "delete"]]
+    assert calls == [["machine", "delete", "--name", "cauldron-foo", "--force"]]
 
 
 def test_restart_container_starts_stopped_machine_without_stop(fake_smolvm):
