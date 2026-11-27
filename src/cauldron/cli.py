@@ -434,13 +434,16 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         # the config would expand $HOME etc. to cauldron-local paths the host
         # cannot bind-mount.
         mounts = podman_remote.host_sibling_mounts(project_dir)
+        # The env is the requested project's own config, but its host-resource
+        # values (e.g. $SSH_AUTH_SOCK) are resolved against the parent's real
+        # environment, since the shell running here may not carry them.
+        env = config.container_env(cfg, environ=podman_remote.nested_environ())
     else:
         mounts = config.container_mounts(cfg)
-    # The env is always the requested project's own config. When nested, its
-    # host-resource values (e.g. $SSH_AUTH_SOCK) already resolve to the real
-    # host paths inherited from the parent, and the target image's defaults
-    # (PATH, etc.) are left intact rather than being replaced by the parent's.
-    env = config.container_env(cfg)
+        # Non-nested: the env is the requested project's own config, expanded
+        # against the host environment. A host variable that is not set is
+        # reported and skipped rather than passed through as a literal.
+        env = config.container_env(cfg)
     result = podman.run_container(
         name=container,
         image=image,

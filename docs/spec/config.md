@@ -137,6 +137,8 @@ SSH_AUTH_SOCK = "$SSH_AUTH_SOCK"
 
 `cauldron init` writes a reference `.cauldron/cauldron.toml` with commented examples for these mounts. Uncomment them to enable passthrough.
 
+A mount or env entry that references a host variable which is not set in the environment Cauldron is run from is skipped, with a warning naming the variable, rather than being passed to Podman as a literal `$VAR` (which is not an absolute path, so the socket would not be bind-mounted). This is how you would know that SSH agent forwarding was not applied because `$SSH_AUTH_SOCK` was unset in the shell, cron job, or login session that started the container.
+
 When a mount target sits under `/run/user/<uid>` (the usual location of `$SSH_AUTH_SOCK`), Podman auto-creates the missing parent directories as root-owned when the container is created. That leaves the container user's `XDG_RUNTIME_DIR` unwritable, so anything writing a socket or pid file there fails with `EACCES`. Cauldron detects this on every start or exec and restores `/run/user/<uid>` to a user-owned `0700` directory. The repair is skipped when `/run/user/<uid>` itself or any ancestor of it is a mount point other than a container-local tmpfs (for example a bind or volume mount at `/run/user`), since chown/chmod through such a mount would change the host filesystem or fail on a read-only mount.
 
 ### `[env]` — environment variables

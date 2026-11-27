@@ -7,17 +7,41 @@ import warnings
 from cauldron.project import CONFIG_GLOBAL_PATH, CONFIG_PROJECT_PATH
 
 
-def _expand_host_vars(value):
+_HOST_VAR_RE = re.compile(r"\$(?:\{)?([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _expand_host_vars(value, environ=None):
     """Expand host environment variables in a string.
 
     ``$HOME``, ``${HOME}``, ``$SSH_AUTH_SOCK`` and similar references are
-    replaced with the corresponding values from the host environment. This
-    lets config files use portable paths without hard-coding the user's
-    home directory or UID.
+    replaced with the corresponding values from ``environ`` (the host
+    environment by default). References whose variable is not present are left
+    as a literal, matching ``os.path.expandvars``; use :func:`_unresolved_host_vars`
+    to detect those before they produce an unusable path.
     """
     if not isinstance(value, str):
         return value
-    return os.path.expandvars(value)
+    if environ is None:
+        environ = os.environ
+
+    def replace(match):
+        return environ.get(match.group(1), match.group(0))
+
+    return _HOST_VAR_RE.sub(replace, value)
+
+
+def _unresolved_host_vars(value, environ=None):
+    """Return the names of ``$VAR``/``${VAR}`` references in ``value`` that are unset.
+
+    ``os.path.expandvars`` leaves an unset reference as a literal instead of
+    raising, so this lets callers tell that a config entry refers to a host
+    variable that is missing rather than to a (valid) literal path.
+    """
+    if not isinstance(value, str):
+        return []
+    if environ is None:
+        environ = os.environ
+    return [name for name in _HOST_VAR_RE.findall(value) if name not in environ]
 
 
 KNOWN_HOOKS = ("post_build", "post_start", "entrypoint")
@@ -266,7 +290,7 @@ def _replace_base_image(path, new_image):
         path.write_text(new_text)
 
 
-def container_env(config):
+def container_env(config, environ=None, warn=None):
     """Return environment variables from config to set in the container.
 
     Values must be strings; non-string values are converted to strings.
@@ -274,29 +298,69 @@ def container_env(config):
     that host paths can be passed through without hard-coding them. The
     ``PATH`` key is exempt because ``${PATH}`` is expanded later to the
     image's default PATH.
+
+    ``environ`` is the mapping used to expand host variables (the host
+    environment by default). Entries whose value references a variable that is
+    absent from it are skipped and reported via ``warn`` (``warnings.warn`` by
+    default) instead of being passed through as a literal ``$VAR``.
     """
+    if warn is None:
+        warn = warnings.warn
     env = {}
     for key, value in config.get("env", {}).items():
         value = value if isinstance(value, str) else str(value)
-        if key != "PATH":
-            value = _expand_host_vars(value)
-        env[key] = value
+        if key == "PATH":
+            env[key] = value
+            continue
+        missing = _unresolved_host_vars(value, environ)
+        if missing:
+            warn(
+                f"Environment variable {key!r} not set in the container: "
+                f"{', '.join(missing)} is not set in the host environment"
+            )
+            continue
+        env[key] = _expand_host_vars(value, environ)
     return env
 
 
-def container_mounts(config):
+def container_mounts(config, environ=None, warn=None):
     """Return normalized mount dicts for the container runtime.
 
     Each dict contains ``source``, ``target`` and ``options`` keys. Host
     environment variables (e.g. ``$HOME``) are expanded in ``source`` and
     ``target`` so config files can use portable paths. Use
     :func:`_format_mount` to convert a dict into Podman's ``-v`` syntax.
+
+    ``environ`` is the mapping used to expand host variables (the host
+    environment by default). A mount whose ``source`` or ``target`` references
+    a variable absent from it — or that resolves to an empty path — is skipped
+    and reported via ``warn`` (``warnings.warn`` by default) rather than passed
+    to Podman as a bogus path (which it would treat as a named volume).
     """
+    if warn is None:
+        warn = warnings.warn
     mounts = []
     for item in config.get("container", {}).get("mounts", []):
         mount = _normalize_mount(item)
-        mount["source"] = _expand_host_vars(mount["source"])
-        mount["target"] = _expand_host_vars(mount["target"])
+        source, target = mount["source"], mount["target"]
+        mount["source"] = _expand_host_vars(source, environ)
+        mount["target"] = _expand_host_vars(target, environ)
+        missing = sorted(
+            set(_unresolved_host_vars(source, environ))
+            | set(_unresolved_host_vars(target, environ))
+        )
+        if missing:
+            warn(
+                f"Mount {source!r} -> {target!r} skipped: "
+                f"{', '.join(missing)} is not set in the host environment"
+            )
+            continue
+        if not mount["source"] or not mount["target"]:
+            warn(
+                f"Mount {source!r} -> {target!r} skipped: "
+                "source and target must be non-empty paths"
+            )
+            continue
         mounts.append(mount)
     return mounts
 

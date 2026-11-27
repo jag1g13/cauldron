@@ -525,6 +525,25 @@ def test_container_mounts_empty_on_scalar_json(fake_podman):
     assert podman.container_mounts("cauldron-foo") == []
 
 
+def test_container_config_env_parses_env_list(fake_podman):
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{json .Config.Env}}", "cauldron-foo"],
+        stdout='["HOME=/home/cauldron", "SSH_AUTH_SOCK=/run/user/1000/keyring/ssh"]\n',
+    )
+    assert podman.container_config_env("cauldron-foo") == {
+        "HOME": "/home/cauldron",
+        "SSH_AUTH_SOCK": "/run/user/1000/keyring/ssh",
+    }
+
+
+def test_container_config_env_empty_on_failure(fake_podman):
+    fake_podman.respond(
+        ["container", "inspect", "-f", "{{json .Config.Env}}", "cauldron-foo"],
+        returncode=1,
+    )
+    assert podman.container_config_env("cauldron-foo") == {}
+
+
 def test_stop_container_runs_podman_stop(fake_podman):
     assert podman.stop_container("cauldron-foo") is True
     assert fake_podman.calls() == [["stop", "cauldron-foo"]]
