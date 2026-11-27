@@ -31,6 +31,23 @@ def _machine(name, state="running", image="img", labels=None, ports=0):
     }
 
 
+def _make_image_tar(path, env):
+    """Write a minimal docker-save-style tar with an image config carrying ``env``."""
+    import io
+    import tarfile
+
+    manifest = json.dumps(
+        [{"Config": "cfg.json", "RepoTags": ["x:latest"], "Layers": []}]
+    )
+    config = json.dumps({"config": {"Env": env}, "architecture": "amd64"})
+    with tarfile.open(str(path), "w") as tar:
+        for name, data in (("manifest.json", manifest), ("cfg.json", config)):
+            info = tarfile.TarInfo(name)
+            payload = data.encode()
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+
+
 def test_set_verbose_changes_flag():
     smolvm.set_verbose(True)
     assert smolvm._verbose is True
@@ -449,9 +466,10 @@ def test_run_container_expands_path_placeholder(fake_smolvm, monkeypatch):
     assert "PATH=/usr/bin:/bin/opt/bin" in create
 
 
-def test_image_default_path_parses_env(monkeypatch):
+def test_image_default_path_parses_env(monkeypatch, tmp_path):
     import subprocess
 
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "none"))
     monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
     monkeypatch.setattr(
         smolvm,
@@ -466,9 +484,10 @@ def test_image_default_path_parses_env(monkeypatch):
     assert smolvm._image_default_path("img:tag") == "/usr/bin:/bin"
 
 
-def test_image_default_path_empty_when_inspect_fails(monkeypatch):
+def test_image_default_path_empty_when_inspect_fails(monkeypatch, tmp_path):
     import subprocess
 
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "none"))
     monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
     monkeypatch.setattr(
         smolvm,
@@ -478,6 +497,38 @@ def test_image_default_path_empty_when_inspect_fails(monkeypatch):
         ),
     )
     assert smolvm._image_default_path("img:tag") == ""
+
+
+def test_image_default_path_reads_from_saved_tar(monkeypatch, tmp_path):
+    smoltar = tmp_path / "smoltar"
+    smoltar.mkdir()
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(smoltar))
+    _make_image_tar(
+        smoltar / "img-latest.tar", ["PATH=/opt/cool:/usr/bin:/bin", "LANG=C"]
+    )
+
+    def no_builder(*args, **kwargs):
+        raise AssertionError(
+            "builder store must not be consulted when the tar has PATH"
+        )
+
+    monkeypatch.setattr(smolvm, "_host_builder", no_builder)
+    assert smolvm._image_default_path("img:latest") == "/opt/cool:/usr/bin:/bin"
+
+
+def test_image_default_path_falls_back_to_builder(monkeypatch, tmp_path):
+    import subprocess
+
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
+    monkeypatch.setattr(
+        smolvm,
+        "_run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout='["PATH=/usr/bin:/bin"]', stderr=""
+        ),
+    )
+    assert smolvm._image_default_path("img:latest") == "/usr/bin:/bin"
 
 
 def test_run_container_returns_create_failure(fake_smolvm):
@@ -518,6 +569,12 @@ def test_start_stop_restart_remove(fake_smolvm):
     fake_smolvm.respond(["machine", "start"], returncode=0)
     fake_smolvm.respond(["machine", "stop"], returncode=0)
     fake_smolvm.respond(["machine", "delete"], returncode=0)
+    # restart_container probes state first; report the machine running so the
+    # stop-then-start path is exercised.
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(_machine("cauldron-foo", state="running")),
+    )
 
     assert smolvm.start_container("cauldron-foo").returncode == 0
     assert smolvm.stop_container("cauldron-foo") is True
@@ -533,6 +590,56 @@ def test_start_stop_restart_remove(fake_smolvm):
         ["machine", "delete", "--name", "cauldron-foo", "--force"],
         ["machine", "delete", "--name", "cauldron-foo", "--force"],
     ]
+
+
+def test_restart_container_starts_stopped_machine_without_stop(fake_smolvm):
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(_machine("cauldron-foo", state="stopped")),
+    )
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    result = smolvm.restart_container("cauldron-foo")
+    assert result.returncode == 0
+    calls = fake_smolvm.calls()
+    assert [c for c in calls if c[:2] == ["machine", "stop"]] == []
+    assert [c for c in calls if c[:2] == ["machine", "start"]] == [
+        ["machine", "start", "--name", "cauldron-foo"]
+    ]
+
+
+def test_run_container_removes_orphan_when_start_fails(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=7)
+    fake_smolvm.respond(["machine", "delete"], returncode=0)
+    result = smolvm.run_container(
+        "cauldron-foo", "cauldron-foo:latest", "/p", "/p", 1000, 1000
+    )
+    assert result.returncode == 7
+    calls = fake_smolvm.calls()
+    assert [c for c in calls if c[:2] == ["machine", "delete"]] == [
+        ["machine", "delete", "--name", "cauldron-foo", "--force"]
+    ]
+
+
+def test_run_test_container_uses_tar_handoff(fake_smolvm, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
+    monkeypatch.setattr(smolvm, "_base_image_exists", lambda base: True)
+
+    def fake_save(tag, dest):
+        dest = pathlib.Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"fake-archive")
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(smolvm, "_builder_save", fake_save)
+    fake_smolvm.respond(["machine", "run"], returncode=0)
+    assert smolvm.run_test_container("busybox") is True
+    run = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "run"])
+    image = run[run.index("--image") + 1]
+    assert image.endswith(".tar")
+    assert image != "busybox"
 
 
 def test_container_shell_probes_printenv(fake_smolvm):

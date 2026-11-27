@@ -22,6 +22,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import warnings
@@ -195,8 +196,55 @@ def image_tar_path(tag):
     return directory / f"{safe}.tar"
 
 
+def _default_path_from_tar(tag):
+    """Return the default PATH read from a saved docker-save tar's image config.
+
+    Returns "" if the tar is missing or the PATH cannot be read. Reading the
+    config from the tar (the artifact smolvm actually receives) keeps PATH
+    expansion working even when the host builder has pruned its copy of the
+    image, as ``image_exists`` allows under ``--no-build``.
+    """
+    tar_path = image_tar_path(tag)
+    if not tar_path.exists():
+        return ""
+    try:
+        with tarfile.open(tar_path) as tar:
+            manifest = next(
+                (
+                    name
+                    for name in tar.getnames()
+                    if name in ("manifest.json", "manifests.json")
+                ),
+                None,
+            )
+            if manifest is None:
+                return ""
+            entries = json.loads(tar.extractfile(manifest).read())
+            config_name = (
+                entries[0].get("Config") if isinstance(entries, list) else None
+            )
+            if not config_name:
+                return ""
+            config = json.loads(tar.extractfile(config_name).read())
+            env_list = config.get("config", {}).get("Env", [])
+            for item in env_list:
+                if isinstance(item, str) and item.startswith("PATH="):
+                    return item.split("=", 1)[1]
+    except (tarfile.TarError, json.JSONDecodeError, KeyError, OSError, StopIteration):
+        return ""
+    return ""
+
+
 def _image_default_path(tag):
-    """Return the default PATH from an image's config, via the host builder."""
+    """Return the default PATH from an image's config.
+
+    Prefers the image's saved docker-save tar (the artifact smolvm receives) so
+    the value does not depend on the host builder still holding the image;
+    falls back to the host builder's store.
+    """
+    path = _default_path_from_tar(tag)
+    if path:
+        return path
     builder = _host_builder()
     if builder is None:
         return ""
@@ -297,14 +345,34 @@ def ensure_base_image(base_image=None):
 
 
 def run_test_container(base_image=None):
-    """Run a throwaway machine from the base image to verify it boots."""
+    """Run a throwaway machine from the base image to verify it boots.
+
+    The base is exported to a temporary docker-save archive and passed to
+    smolvm as ``--image <tar>`` — the same handoff the project image uses —
+    rather than as a bare tag. smolvm reads a bare ``--image`` as a registry
+    reference, so a locally built base (absent from any registry) would fail
+    to pull; the tar exercises the real path. ``ensure_base_image`` places the
+    base in the host builder first, so the export succeeds.
+    """
     base = base_image or BASE_IMAGE
-    return (
-        _smolvm(
-            ["machine", "run", "--net", "--image", base, "--", "echo", "ok"]
-        ).returncode
-        == 0
-    )
+    builder = _host_builder()
+    if builder is None:
+        return False
+    if not _base_image_exists(base) and _run([builder, "pull", base]).returncode != 0:
+        return False
+    tmpdir = pathlib.Path(tempfile.mkdtemp(prefix="cauldron-basetest-"))
+    dest = tmpdir / f"{re.sub(r'[^A-Za-z0-9._-]', '-', base)}.tar"
+    try:
+        if _builder_save(base, dest).returncode != 0:
+            return False
+        return (
+            _smolvm(
+                ["machine", "run", "--net", "--image", str(dest), "--", "echo", "ok"]
+            ).returncode
+            == 0
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 def build_image(tag, dockerfile, context, build_args=None, build_network=None):
@@ -533,6 +601,10 @@ def run_container(
 
     result = _smolvm(["machine", "start", "--name", name])
     if result.returncode != 0:
+        # A created-but-never-started machine would look "existing" to the next
+        # `cauldron up` and push it down the stop/start path instead of a
+        # recreate; remove the orphan so the next attempt starts clean.
+        remove_container(name, force=True)
         return result
     return result
 
@@ -543,11 +615,17 @@ def start_container(name):
 
 
 def restart_container(name):
-    """Restart a machine. Returns the ``CompletedProcess``."""
-    stop = _smolvm(["machine", "stop", "--name", name])
-    return (
-        _smolvm(["machine", "start", "--name", name]) if stop.returncode == 0 else stop
-    )
+    """Restart a machine. Returns the ``CompletedProcess``.
+
+    A machine that is already stopped skips the stop (``machine stop`` rejects
+    one that is not running) and is started directly, so ``cauldron up``
+    recovers a machine left stopped by ``cauldron stop``.
+    """
+    if container_running(name):
+        stop = _smolvm(["machine", "stop", "--name", name])
+        if stop.returncode != 0:
+            return stop
+    return _smolvm(["machine", "start", "--name", name])
 
 
 def stop_container(name):
