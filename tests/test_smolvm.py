@@ -9,6 +9,7 @@ which is pointed at the same fake for these tests.
 import json
 import os
 import pathlib
+import shlex
 import socket
 
 import pytest
@@ -713,3 +714,17 @@ def test_ssh_proxy_command(fake_smolvm):
     assert "machine exec --name cauldron-foo" in command
     assert "--user 0 -i --" in command
     assert "/usr/sbin/sshd -i" in command
+
+
+def test_ssh_proxy_command_quotes_unsafe_name(fake_smolvm):
+    # A user-supplied machine name with shell metacharacters must be quoted,
+    # since OpenSSH runs the ProxyCommand through a shell.
+    name = "cauldron; rm -rf /"
+    command = smolvm.ssh_proxy_command(name)
+    assert shlex.quote(name) in command
+    assert f"--name {name}" not in command
+
+
+def test_host_builder_prefers_configured_podman_path(monkeypatch):
+    monkeypatch.setenv("CAULDRON_PODMAN_PATH", "/usr/local/bin/cauldron-podman")
+    assert smolvm._host_builder() == "/usr/local/bin/cauldron-podman"

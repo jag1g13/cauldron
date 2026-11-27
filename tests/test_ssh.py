@@ -139,6 +139,14 @@ def test_build_remote_uri_quotes_podman_path_with_spaces(monkeypatch):
     assert "ProxyCommand '/opt/podman tools/podman' exec -u 0 -i cauldron-foo" in uri
 
 
+def test_build_remote_uri_quotes_container_name():
+    # A user-supplied container name with shell metacharacters must be quoted so
+    # the ProxyCommand (run via a shell) cannot inject commands.
+    name = "cauldron; rm -rf /"
+    uri = ssh._build_host_block(name)
+    assert f"exec -u 0 -i {shlex.quote(name)}" in uri
+
+
 def test_ensure_ssh_config_creates_config(tmp_path):
     config_file = tmp_path / "config"
     with (

@@ -650,8 +650,12 @@ def find_port_owner(host_port):
 
 
 def ssh_proxy_command(container):
-    """Return the sshd ProxyCommand that reaches a container's sshd via exec."""
+    """Return the sshd ProxyCommand that reaches a container's sshd via exec.
+
+    The container name is quoted: OpenSSH runs ProxyCommand through a shell, so
+    a user-supplied name containing shell metacharacters must not inject commands.
+    """
     return (
-        f"{shlex.quote(_podman_bin())} exec -u 0 -i {container}"
+        f"{shlex.quote(_podman_bin())} exec -u 0 -i {shlex.quote(container)}"
         " /usr/sbin/sshd -i -o UsePAM=no -o PasswordAuthentication=no"
     )

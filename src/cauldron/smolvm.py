@@ -106,7 +106,15 @@ def _smolvm(args, quiet=False, **kwargs):
 
 
 def _host_builder():
-    """Return the host image builder to build with: ``podman`` or ``docker``."""
+    """Return the host image builder to build with.
+
+    Prefers the configured Podman path (``CAULDRON_PODMAN_PATH``) so a mounted
+    ``podman-remote`` client is used, matching the Podman backend; then a local
+    ``podman`` or ``docker`` on PATH.
+    """
+    podman_path = os.environ.get("CAULDRON_PODMAN_PATH")
+    if podman_path:
+        return podman_path
     if shutil.which("podman"):
         return "podman"
     if shutil.which("docker"):
@@ -155,15 +163,16 @@ def _builder_save(tag, dest):
         )
     dest = pathlib.Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Export to a unique, initially nonexistent path on the destination
-    # filesystem (avoids the fixed name colliding with a stale or concurrent
-    # export), then rename it into place atomically; clean the temp up on
-    # failure.
+    # mkstemp hands back a guaranteed-unique name but also creates the file;
+    # remove it so `save -o` targets a path that does not yet exist (podman/
+    # buildah refuse to append to an existing docker-archive), then rename the
+    # export into place atomically and clean the temp up on failure.
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{dest.name}.", suffix=".tmp", dir=str(dest.parent)
     )
     os.close(fd)
     tmp = pathlib.Path(tmp_name)
+    tmp.unlink()
     try:
         result = _run([builder, "save", "-o", str(tmp), tag])
         if result.returncode == 0:
@@ -189,17 +198,19 @@ def image_tar_path(tag):
 def _image_default_path(tag):
     """Return the default PATH from an image's config, via the host builder."""
     builder = _host_builder()
-    if builder == "podman":
-        result = _run(
-            ["podman", "image", "inspect", tag, "--format", "{{json .Config.Env}}"],
-            quiet=True,
-        )
-    elif builder == "docker":
+    if builder is None:
+        return ""
+    # A bare docker build uses ``docker inspect``; podman (whether the on-PATH
+    # binary or a configured CAULDRON_PODMAN_PATH client) uses ``image inspect``.
+    if builder == "docker":
         result = _run(
             ["docker", "inspect", tag, "--format", "{{json .Config.Env}}"], quiet=True
         )
     else:
-        return ""
+        result = _run(
+            [builder, "image", "inspect", tag, "--format", "{{json .Config.Env}}"],
+            quiet=True,
+        )
     if result.returncode != 0:
         return ""
     try:
@@ -731,9 +742,12 @@ def find_port_owner(host_port):
 def ssh_proxy_command(container):
     """Return the sshd ProxyCommand that reaches a machine's sshd via exec.
 
-    Mirrors the validated spike form (machine exec takes ``--name``).
+    Mirrors the validated spike form (machine exec takes ``--name``). The
+    machine name is quoted: OpenSSH runs ProxyCommand through a shell, so a
+    user-supplied name containing shell metacharacters must not inject commands.
     """
     return (
-        f"{shlex.quote(_smolvm_bin())} machine exec --name {container} --user 0 -i --"
+        f"{shlex.quote(_smolvm_bin())} machine exec --name {shlex.quote(container)}"
+        " --user 0 -i --"
         " /usr/sbin/sshd -i -o UsePAM=no -o PasswordAuthentication=no"
     )
