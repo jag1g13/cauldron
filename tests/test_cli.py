@@ -334,6 +334,60 @@ def test_check_warns_but_passes_when_socket_unavailable(
     assert "All checks passed." in result.output
 
 
+def test_check_verifies_kvm_access_for_smolvm_backend(
+    fake_smolvm, monkeypatch, tmp_path
+):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvm"\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cauldron.smolvm.KVM_DEVICE", "/dev/null")
+    monkeypatch.setattr("cauldron.smolvm.ensure_base_image", lambda base=None: True)
+    monkeypatch.setattr("cauldron.smolvm.run_test_container", lambda base=None: True)
+
+    result = invoke(["check"])
+
+    assert result.exit_code == 0
+    assert "Checking KVM device is available and writable... ok" in result.output
+    assert "All checks passed." in result.output
+
+
+def test_invalid_backend_type_is_a_clean_error(tmp_path, monkeypatch):
+    # A typo'd backend type must surface as a clean configuration error, not an
+    # uncaught traceback out of the group callback.
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvmx"\n')
+    monkeypatch.chdir(tmp_path)
+
+    result = invoke([])
+
+    assert result.exit_code != 0
+    assert "Unknown backend type" in result.output
+    assert "smolvmx" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_check_reports_kvm_permission_hint_for_smolvm_backend(
+    fake_smolvm, monkeypatch, tmp_path
+):
+    cauldron_dir = tmp_path / ".cauldron"
+    cauldron_dir.mkdir()
+    (cauldron_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvm"\n')
+    monkeypatch.chdir(tmp_path)
+    device = tmp_path / "kvm"
+    device.write_text("")
+    monkeypatch.setattr("cauldron.smolvm.KVM_DEVICE", str(device))
+    monkeypatch.setattr("cauldron.smolvm._path_writable", lambda path: False)
+    monkeypatch.setattr("cauldron.smolvm.ensure_base_image", lambda base=None: True)
+
+    result = invoke(["check"])
+
+    assert result.exit_code != 0
+    assert "Checking KVM device is available and writable... failed" in result.output
+    assert f"sudo setfacl -m u:{os.getuid()}:rw {device}" in result.output
+
+
 def test_up_rejects_conflicting_build_flags():
     result = invoke(["up", "--build", "--no-build"])
     assert result.exit_code != 0
@@ -539,6 +593,31 @@ def test_up_skips_build_when_image_exists(fake_podman, monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert build_calls(fake_podman) == []
+
+
+def test_up_sets_up_remote_ssh(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    container_is_running(fake_podman)
+
+    with patch("cauldron.ssh.ensure_remote_ssh") as mock_ssh:
+        result = invoke(["up"])
+
+    assert result.exit_code == 0
+    mock_ssh.assert_called_once()
+    assert mock_ssh.call_args.args[0].startswith("cauldron-")
+
+
+def test_up_succeeds_when_remote_ssh_fails(fake_podman, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    containers_exist(fake_podman)
+    container_is_running(fake_podman)
+
+    with patch("cauldron.ssh.ensure_remote_ssh", side_effect=ssh.SSHError("boom")):
+        result = invoke(["up"])
+
+    assert result.exit_code == 0
+    assert "Remote-SSH setup skipped" in result.output
 
 
 def test_up_builds_intermediate_when_dockerfile_exists(
@@ -1281,12 +1360,10 @@ def test_code_fails_when_ssh_setup_errors(fake_podman, monkeypatch, tmp_path):
 
     with (
         patch("cauldron.vscode.code_available", return_value=True),
-        patch("cauldron.ssh.ensure_keypair"),
         patch(
-            "cauldron.ssh.ensure_container_ssh",
+            "cauldron.ssh.ensure_remote_ssh",
             side_effect=ssh.SSHError("test error"),
         ),
-        patch("cauldron.ssh.ensure_ssh_config"),
     ):
         result = invoke(["code"])
 

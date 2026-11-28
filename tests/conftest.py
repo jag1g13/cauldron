@@ -10,17 +10,19 @@ import json
 import pathlib
 import sys
 import uuid
+from unittest.mock import MagicMock
 
 import pytest
 
-from cauldron import config, podman, project
+from cauldron import backend, config, podman, project, ssh
 
 FAKE_PODMAN = pathlib.Path(__file__).parent / "fake_podman.py"
+FAKE_SMOLVM = pathlib.Path(__file__).parent / "fake_smolvm.py"
 BUSYBOX_IMAGE = "docker.io/library/busybox:1.37.0"
 
 
-class FakePodman:
-    """Handle for the recording podman executable used by argument-level tests."""
+class FakeRuntime:
+    """Handle for a recording runtime executable used by argument-level tests."""
 
     def __init__(self, log, responses):
         self.log = pathlib.Path(log)
@@ -86,12 +88,37 @@ def reset_verbose():
 
 
 @pytest.fixture(autouse=True)
+def reset_backend():
+    """Re-resolve the runtime backend for each test (no caching across tests)."""
+    backend.reset()
+    yield
+    backend.reset()
+
+
+@pytest.fixture(autouse=True)
 def isolate_user_config(tmp_path, monkeypatch):
-    """Stop the ambient user config and Dockerfile from affecting tests."""
+    """Stop ambient configs from leaking into tests.
+
+    Runs from a fresh empty directory (so the repository's own project
+    config — which selects the runtime backend — is never read), and points
+    the global config and Dockerfile paths at test-local files.
+    """
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "global.toml")
     monkeypatch.setattr(
         project, "DOCKERFILE_GLOBAL_PATH", tmp_path / "global.Dockerfile"
     )
+
+
+@pytest.fixture(autouse=True)
+def stub_remote_ssh(monkeypatch):
+    """Stop ``up``/``code`` from performing real Remote-SSH setup in tests.
+
+    The wrapper is replaced with a no-op so no key generation, in-container
+    exec, or SSH config writes happen. Tests that exercise the setup patch
+    ``ssh.ensure_remote_ssh`` (or the inner functions) explicitly.
+    """
+    monkeypatch.setattr(ssh, "ensure_remote_ssh", MagicMock())
 
 
 @pytest.fixture(scope="session")
@@ -175,4 +202,22 @@ def fake_podman(tmp_path, monkeypatch):
     # so an ambient nested-cauldron environment does not switch commands into the
     # nested code path. Nested tests set running_in_remote explicitly.
     monkeypatch.delenv("CONTAINER_HOST", raising=False)
-    return FakePodman(log, responses)
+    return FakeRuntime(log, responses)
+
+
+@pytest.fixture
+def fake_smolvm(tmp_path, monkeypatch):
+    """Point smolvm at the recording fake and return its handle."""
+    log = tmp_path / "smolvm.log"
+    responses = tmp_path / "smolvm-responses.json"
+    state = tmp_path / "smolvm.state"
+    binary = tmp_path / "smolvm"
+    binary.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{FAKE_SMOLVM}" "$@"\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("CAULDRON_SMOLVM_PATH", str(binary))
+    monkeypatch.setenv("FAKE_SMOLVM_LOG", str(log))
+    monkeypatch.setenv("FAKE_SMOLVM_RESPONSES", str(responses))
+    monkeypatch.setenv("FAKE_SMOLVM_STATE", str(state))
+    # The built project image is a docker-save tar; keep it in a test-local dir.
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "smoltar"))
+    return FakeRuntime(log, responses)

@@ -1,0 +1,9 @@
+NAME                           STATE         CPUS     MEMORY  MOUNTS   PORTS  STORAGE  OVERLAY  BRANCHED FROM
+-------------------------------------------------------------------------------------------------------------
+cauldron-spike-exec-1794992004 running          4   8192 MiB       0       0   20 GiB   10 GiB  -            
+cauldron-spike-img-1794992004  running          4   8192 MiB       0       0   20 GiB   10 GiB  -            
+cauldron-spike-img2-1794992004 running          4   8192 MiB       0       0   20 GiB   10 GiB  -            
+cauldron-spike-lc-1794992004   running          4   8192 MiB       1       0   20 GiB   10 GiB  -            
+cauldron-spike-list-1794992004 running          4   8192 MiB       0       0   20 GiB   10 GiB  -            
+cauldron-spike-port-1794992004 created          4   8192 MiB       0       1   20 GiB   10 GiB  -            
+cauldron-spike-user-1794992004 running          4   8192 MiB       1       0   20 GiB   10 GiB  -            

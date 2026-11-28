@@ -273,6 +273,102 @@ def test_container_ports_returns_empty_when_missing():
     assert config.container_ports({}) == []
 
 
+def test_load_config_merges_devices(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+devices = ["/dev/kvm", "/dev/dri"]
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+devices = ["/dev/kvm:rwm"]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir, warn=lambda _msg: None)
+
+    devices = loaded["container"]["devices"]
+    assert "/dev/kvm:rwm" in devices
+    assert "/dev/dri" in devices
+    assert "/dev/kvm" not in devices
+
+
+def test_load_config_warns_on_device_overlap(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[container]
+devices = ["/dev/kvm"]
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+devices = ["/dev/kvm:rwm"]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+
+    warnings = []
+    config.load_config(project_dir, warn=warnings.append)
+    assert any("overrides global device" in w for w in warnings)
+
+
+def test_load_config_rejects_non_string_device(tmp_path, monkeypatch):
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[container]
+devices = ["/dev/kvm", 3]
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    with pytest.raises(ValueError, match="Device must be a string"):
+        config.load_config(project_dir, warn=lambda _msg: None)
+
+
+def test_container_devices_returns_configured_devices():
+    cfg = {"container": {"devices": ["/dev/kvm", "/dev/dri"]}}
+    assert config.container_devices(cfg) == ["/dev/kvm", "/dev/dri"]
+
+
+def test_container_devices_returns_empty_when_missing():
+    assert config.container_devices({}) == []
+
+
+def test_container_build_network_returns_configured_value():
+    cfg = {"container": {"build_network": "host"}}
+    assert config.container_build_network(cfg) == "host"
+
+
+def test_container_build_network_defaults_to_none():
+    assert config.container_build_network({}) is None
+    assert config.container_build_network({"container": {}}) is None
+    assert config.container_build_network({"container": {"build_network": ""}}) is None
+
+
+def test_container_network_returns_configured_value():
+    cfg = {"container": {"network": "host"}}
+    assert config.container_network(cfg) == "host"
+
+
+def test_container_network_defaults_to_none():
+    assert config.container_network({}) is None
+    assert config.container_network({"container": {}}) is None
+    assert config.container_network({"container": {"network": ""}}) is None
+
+
 def test_load_config_merges_known_hosts_by_hostname(tmp_path, monkeypatch):
     global_file = tmp_path / "home" / "cauldron.toml"
     global_file.parent.mkdir()
@@ -528,3 +624,94 @@ def test_resolve_script_falls_back_to_global_script(tmp_path, monkeypatch):
 def test_resolve_script_rejects_paths(tmp_path):
     with pytest.raises(ValueError, match="must be a filename"):
         config.resolve_script(".cauldron/setup.sh", tmp_path)
+
+
+def test_backend_type_defaults_to_podman():
+    assert config.backend_type({}) == "podman"
+    assert config.backend_type({"backend": {}}) == "podman"
+
+
+def test_backend_type_returns_configured_value():
+    assert config.backend_type({"backend": {"type": "smolvm"}}) == "smolvm"
+
+
+def test_backend_smolvm_returns_table():
+    assert config.backend_smolvm({"backend": {"smolvm": {"cpus": 2}}}) == {"cpus": 2}
+
+
+def test_backend_smolvm_returns_empty_when_missing():
+    assert config.backend_smolvm({}) == {}
+    assert config.backend_smolvm({"backend": {"type": "smolvm"}}) == {}
+
+
+def test_backend_smolvm_nested_defaults_to_false():
+    assert config.backend_smolvm_nested({}) is False
+    assert config.backend_smolvm_nested({"backend": {"smolvm": {}}}) is False
+
+
+def test_backend_smolvm_nested_reads_flag():
+    cfg = {"backend": {"smolvm": {"nested": True}}}
+    assert config.backend_smolvm_nested(cfg) is True
+
+
+def test_load_config_merges_backend_table(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text("""
+[backend]
+type = "podman"
+
+[backend.smolvm]
+cpus = 4
+memory = 4096
+""")
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    project_file = project_dir / "cauldron.toml"
+    project_file.write_text("""
+[backend]
+type = "smolvm"
+
+[backend.smolvm]
+memory = 8192
+""")
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir, warn=lambda _msg: None)
+
+    assert loaded["backend"]["type"] == "smolvm"
+    # nested provider table merges key-by-key: project overrides memory,
+    # global's cpus is preserved
+    assert loaded["backend"]["smolvm"] == {"cpus": 4, "memory": 8192}
+
+
+def test_load_config_backend_absent_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", tmp_path / "missing.toml")
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "cauldron.toml").write_text('[env]\nEDITOR = "vim"\n')
+
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+    loaded = config.load_config(project_dir)
+
+    assert "backend" not in loaded
+    assert config.backend_type(loaded) == "podman"
+
+
+def test_load_config_warns_on_backend_type_override(tmp_path, monkeypatch):
+    global_file = tmp_path / "home" / "cauldron.toml"
+    global_file.parent.mkdir()
+    global_file.write_text('[backend]\ntype = "podman"\n')
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / "cauldron.toml").write_text('[backend]\ntype = "smolvm"\n')
+
+    monkeypatch.setattr(config, "CONFIG_GLOBAL_PATH", global_file)
+    monkeypatch.setattr(config, "CONFIG_PROJECT_PATH", "cauldron.toml")
+
+    warnings = []
+    config.load_config(project_dir, warn=warnings.append)
+    assert any("backend type" in w and "overrides global" in w for w in warnings)

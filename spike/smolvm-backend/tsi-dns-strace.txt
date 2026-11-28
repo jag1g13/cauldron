@@ -1,0 +1,80 @@
+strace excerpt: glibc getaddrinfo(AF_UNSPEC) inside a container netns of a
+TSI-backed smolvm machine (smolvm 1.35.4, guest kernel 6.18.60 aarch64,
+rootless podman 5.4.2, Debian trixie glibc 2.41).
+
+Captured with, inside the machine:
+
+    podman run --rm <image-with-strace> \
+        strace -f -s 200 -e trace=socket,connect,sendto,sendmsg,sendmmsg \
+        getent ahosts pypi.org
+
+getent exits non-zero; this is the first query round (ns 169.254.1.1,
+attempt 1 of 2 — the same shape repeats for 192.168.15.1 and both retry
+rounds), from the container whose resolv.conf lists both nameservers:
+
+    socket(AF_INET, SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK, IPPROTO_IP) = 3
+    connect(3, {sa_family=AF_INET, sin_port=htons(53), sin_addr=inet_addr("169.254.1.1")}, 16) = 0
+    sendmmsg(3, [
+      {msg_hdr={msg_name=NULL, msg_namelen=0,
+                msg_iov=[{iov_base="Y\237\1\0\0\1\0\0\0\0\0\0\4pypi\3org\0\0\1\0\1",
+                          iov_len=26}],
+                msg_iovlen=1, msg_controllen=0, msg_flags=0}, msg_len=26},
+      {msg_hdr={msg_name=NULL, msg_namelen=0,
+                msg_iov=[{iov_base="h\236\1\0\0\1\0\0\0\0\0\0\4pypi\3org\0\0\34\0\1",
+                          iov_len=26}],                       <- AAAA query
+                msg_iovlen=1, msg_controllen=0, msg_flags=0}}], 2, MSG_NOSIGNAL) = 1
+                                                           <- short write: 1 of 2
+    sendto(3, "h\236\1\0\0\1\0\0\0\0\0\0\4pypi\3org\0\0\34\0\1", 26, MSG_NOSIGNAL, NULL, 0) \
+        = -1 EINVAL (Invalid argument)
+                                   <- glibc falls back to sendto for the
+                                      leftover query; the socket refuses
+
+Reading: glibc 2.41's AF_UNSPEC resolver sends the A and AAAA queries in a
+single sendmmsg() on one connected UDP socket, one socket per nameserver
+attempt (2 nameservers x 2 retries below). Under TSI in a nested container
+netns, sendmmsg() sends only the first datagram and returns a short count.
+glibc then resends the leftover query with sendto(), which fails with
+EINVAL, and abandons the attempt — its non-blocking poll returns
+immediately with POLLOUT (nearly all of the 5 s budget still left), so the
+lookup fails fast rather than timing out, and the socket is never read.
+The first query's reply IS delivered to the socket buffer — a raw probe
+that repeats the same sequence receives the 90-byte A reply right after the
+failed leftover send (see repro-tsi-dns.sh); glibc just never reads it.
+
+The lookup therefore fails deterministically and promptly with EAI_AGAIN
+("Temporary failure in name resolution"). Single-message sendmmsg
+(single-family lookups) and unconnected sendto (musl) work; in the guest
+itself a 2-datagram sendmmsg succeeds (2 of 2) and both replies arrive.
+TCP DNS to external resolvers also works from the affected containers —
+the defect is specific to connected-UDP datagram batches.
+
+Source-level root cause (from smol-machines/libkrunfw, patches/0011,
+0012 and 0005):
+
+- tsi_hijack (patches/0012) swaps every user AF_INET/AF_INET6
+  SOCK_DGRAM socket for a TSI socket: a state machine (S_INET /
+  S_HYBRID / S_VSOCK) over an inet shadow socket and an initially
+  unconnected vsock proxy.
+- tsi_connect() (patches/0011) for a datagram connect() in a
+  NON-INITIAL netns — the #785 fix path — only records the peer in
+  tsk->sendto_addr and leaves status = S_HYBRID, so every send
+  re-routes per destination. The initial netns takes the legacy path,
+  which actually connects the underlying socket.
+- tsi_dgram_sendmsg(): with status == S_HYBRID and no msg_name it
+  replays the recorded peer (guarded on S_HYBRID!), falls through to
+  the S_VSOCK body which registers the target with the host proxy,
+  rewrites the address to AF_VSOCK, sends via the unconnected vsock
+  proxy, and on success flips tsk->status = S_VSOCK.
+- The second datagram: status == S_VSOCK, so the peer-replay is
+  skipped and msg_name is NULL, so the target-registration block is
+  skipped too — the send collapses to a bare
+  vsocket->ops->sendmsg() on an unconnected vsock datagram with no
+  destination, which vsock_dgram_sendmsg (patches/0005) rejects with
+  -EINVAL (no usable remote address). sendmmsg() sends
+  message-by-message, so message 2's EINVAL yields a return of the
+  count of successes — the 1-of-2 short write.
+- The tsk->status = S_VSOCK flip at the end of the S_HYBRID
+  fallthrough is the offending transition: it is only sound when the
+  vsocket is genuinely connected (the initial-netns flow). Fix
+  directions: don't flip on that fallthrough, or replay the recorded
+  sendto_addr in the S_VSOCK-without-msg_name case.

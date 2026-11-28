@@ -5,9 +5,41 @@ Cauldron reads optional TOML configuration files. Project settings override glob
 - Global config: `~/.config/cauldron/cauldron.toml`
 - Project config: `.cauldron/cauldron.toml`
 
-When both files exist, Cauldron merges them. The `[env]` table is merged at the key level, the `[container]` table is merged key-by-key, and `mounts`, `ports`, and `known_hosts` are merged by their natural identifiers so that project values override global values without discarding unrelated entries.
+When both files exist, Cauldron merges them. The `[env]` table is merged at the key level, the `[container]` table is merged key-by-key, and `mounts`, `ports`, `known_hosts`, and `devices` are merged by their natural identifiers so that project values override global values without discarding unrelated entries.
 
 ## Top-level sections
+
+### `[backend]` — runtime backend
+
+`type` selects the runtime for the project's development environment. The
+default is `podman` (rootless Podman container); `smolvm` runs it in a smol
+microVM instead (see the README's "Runtime backend" and
+`docs/nested-cauldron.md`).
+
+```toml
+[backend]
+type = "smolvm"
+```
+
+The `[backend.smolvm]` table carries smolvm-specific settings and applies
+only under the smolvm backend:
+
+#### `nested`
+
+```toml
+[backend.smolvm]
+nested = true
+```
+
+Passes smolvm's `--nested` on `machine create`, giving the guest its own
+`/dev/kvm` so it can run VMs itself (for example a Cauldron inside the
+machine using the smolvm backend). Off by default; the host must support
+nested KVM or smolvm fails the machine start cleanly. The guest's workload
+user is unprivileged and cannot open `/dev/kvm` until it is granted access,
+so do that after the machine starts, as root, with a command into the guest —
+for example `smolvm machine exec --name <machine> --user 0 -- sh -c
+'setfacl -m u:$(id -u cauldron):rw /dev/kvm'` (or `chmod`/group the node if
+the image lacks `setfacl`).
 
 ### `[container]` — container runtime options
 
@@ -23,6 +55,41 @@ base_image = "astral/uv:python3.14-trixie"
 ```
 
 Use a pre-built container image, not a Dev Container *template*. Templates (e.g. `ghcr.io/devcontainers/templates/...`) are OCI artifacts whose layers use a media type that Podman cannot build from, so `podman build` fails with `Unknown media type during manifest conversion`. The equivalent pre-built images live at `mcr.microsoft.com/devcontainers/...` (see <https://github.com/devcontainers/images>) and build correctly. When Cauldron detects this failure, it offers to rewrite `base_image` to the matching pre-built image and retry the build.
+
+#### `build_network`
+
+Set the network used for image builds by passing the builder's `--network`
+flag (for example `host`). Unset by default, in which case the builder's own
+default is used. Useful when the builder's default container networking cannot
+resolve names or reach the network — for example building inside a microVM or
+container whose userland networking is degraded, where `--network host` runs
+the build steps in the host's own network namespace.
+
+```toml
+[container]
+build_network = "host"
+```
+
+#### `network`
+
+Set the network of the project container itself by passing the container
+runtime's `--network` flag (for example `host`). Unset by default, in which
+case the runtime's own default is used — typically a private bridge with NAT
+(DNS in that mode is provided by the runtime, and works wherever the runtime's
+own networking works). `host` runs the container in the host's own network
+namespace instead, sharing the host's resolver and interfaces: the fix for
+environments where the runtime's container networking is degraded (for
+example inside microVMs whose nested containers cannot resolve names). Note
+that ports published via `ports` are discarded in host networking mode (the
+runtime warns as it starts the container), and that when running against a
+remote Podman service (`podman_socket`) `host` refers to that host's network
+namespace. The smolvm backend ignores this key (machines are always created
+with `--net`).
+
+```toml
+[container]
+network = "host"
+```
 
 #### `podman_socket`
 
@@ -89,6 +156,8 @@ Global and project mounts are merged by `target`. If a project mount has the sam
 
 When SELinux is installed and enabled on the host, Cauldron warns if a mount's options do not include the `z` or `Z` relabel option. This is a warning, not an error; if the container cannot access the mounted files, add `Z` (private unshared) or `z` (shared) to the options.
 
+Under the smolvm backend, mounts are classified by their source path, because smolvm's virtiofs share only accepts directories: Unix sockets (e.g. `$SSH_AUTH_SOCK`) are passed with `--mount-socket` (there is no read-only form, so `ro` is ignored), directories are shared with `-v` (honouring `ro`), and anything else (plain files, missing paths) is skipped with a warning.
+
 #### `ports`
 
 Publish container ports to the host.
@@ -103,6 +172,22 @@ ports = [
 ```
 
 Each entry is a string in Podman's `-p` syntax. Global and project ports are merged by host port. If a project port maps the same host port as a global port, the project port wins and Cauldron emits a warning.
+
+#### `devices`
+
+Pass host device nodes into the container. Each entry is a string in Podman's `--device` syntax.
+
+```toml
+[container]
+devices = [
+  "/dev/kvm",
+  "/dev/dri:/dev/dri:rwm",
+]
+```
+
+The short form is a host device path (e.g. `/dev/kvm`); the long form is `host-path:container-path:permissions`, where permissions are `r`, `w`, and `m` combinations. Entries are passed to Podman's `--device` flag. Global and project devices are merged by host path: a project entry for the same host path overrides the global one and Cauldron emits a warning.
+
+Access to a device node is governed by its permissions on the host (ownership plus any named ACL), not by how it reaches the container: under rootless Podman `--device` and a plain bind mount behave the same way. Grant the container user access on the host first — for example by adding it to the relevant group or setting a named ACL (`setfacl -m u:<uid>:rw /dev/kvm`) — and use `devices` rather than a `mounts` entry to make the node available.
 
 #### `known_hosts`
 
@@ -237,8 +322,9 @@ With the project config above, the effective configuration is:
 
 - A mount must have `source` and `target`. Missing keys raise an error when the config is loaded.
 - A port must be a string. Non-string port entries raise an error when the config is loaded.
+- A device must be a string. Non-string device entries raise an error when the config is loaded.
 - A known-hosts entry must be a string in `hostname:ip` format. Entries without a colon raise an error when the config is loaded.
-- Overlapping mount targets, host ports, or known-hosts hostnames are allowed but produce a warning; the last defined value wins.
+- Overlapping mount targets, host ports, device paths, or known-hosts hostnames are allowed but produce a warning; the last defined value wins.
 - Invalid TOML continues to raise the same TOML parsing error as before.
 
 ## Scope

@@ -1,0 +1,851 @@
+"""Contract tests for the smolvm wrapper.
+
+Argument-level behaviour is asserted through the recording fake (see
+``conftest.py``). The smolvm backend drives the ``smolvm`` CLI through
+subprocess and builds the project image with the host builder (podman/docker),
+which is pointed at the same fake for these tests.
+"""
+
+import json
+import os
+import pathlib
+import shlex
+import socket
+
+import pytest
+
+from cauldron import smolvm
+
+
+def _ls_json(*machines):
+    return json.dumps(list(machines))
+
+
+def _machine(name, state="running", image="img", labels=None, ports=0):
+    return {
+        "name": name,
+        "state": state,
+        "image": image,
+        "labels": labels or {},
+        "ports": ports,
+    }
+
+
+def _make_image_tar(path, env):
+    """Write a minimal docker-save-style tar with an image config carrying ``env``."""
+    import io
+    import tarfile
+
+    manifest = json.dumps(
+        [{"Config": "cfg.json", "RepoTags": ["x:latest"], "Layers": []}]
+    )
+    config = json.dumps({"config": {"Env": env}, "architecture": "amd64"})
+    with tarfile.open(str(path), "w") as tar:
+        for name, data in (("manifest.json", manifest), ("cfg.json", config)):
+            info = tarfile.TarInfo(name)
+            payload = data.encode()
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+
+
+def test_set_verbose_changes_flag():
+    smolvm.set_verbose(True)
+    assert smolvm._verbose is True
+    smolvm.set_verbose(False)
+    assert smolvm._verbose is False
+
+
+def test_run_records_argv_without_binary(fake_smolvm):
+    result = smolvm._smolvm(["--version"])
+    assert result.returncode == 0
+    assert fake_smolvm.calls() == [["--version"]]
+
+
+def test_run_returns_nonzero_when_smolvm_not_found(monkeypatch):
+    monkeypatch.setenv("CAULDRON_SMOLVM_PATH", "/nonexistent/smolvm")
+    result = smolvm._smolvm(["--version"])
+    assert result.returncode == 1
+
+
+def test_version_true_when_smolvm_present(fake_smolvm):
+    assert smolvm.version() is True
+
+
+def test_version_false_when_smolvm_fails(fake_smolvm):
+    fake_smolvm.respond(["--version"], returncode=1)
+    assert smolvm.version() is False
+
+
+def test_kvm_check_passes_when_device_is_writable(monkeypatch):
+    monkeypatch.setattr(smolvm, "KVM_DEVICE", "/dev/null")
+    assert smolvm.kvm_check() == (True, "")
+
+
+def test_kvm_check_reports_missing_device(monkeypatch, tmp_path):
+    monkeypatch.setattr(smolvm, "KVM_DEVICE", str(tmp_path / "absent-kvm"))
+    ok, hint = smolvm.kvm_check()
+    assert ok is False
+    assert f"{tmp_path / 'absent-kvm'} is missing" in hint
+    assert "KVM" in hint
+
+
+def test_kvm_check_reports_unwritable_device(monkeypatch, tmp_path):
+    device = tmp_path / "kvm"
+    device.write_text("")
+    monkeypatch.setattr(smolvm, "KVM_DEVICE", str(device))
+    monkeypatch.setattr(smolvm, "_path_writable", lambda path: False)
+    ok, hint = smolvm.kvm_check()
+    assert ok is False
+    assert f"sudo setfacl -m u:{os.getuid()}:rw {device}" in hint
+    assert "user namespaces" in hint
+
+
+def test_run_container_passes_nested_flag(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    smolvm.run_container("cauldron-foo", "img:latest", "/p", "/p", 1000, 1000)
+    create_call = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "create"])
+    assert "--nested" not in create_call
+
+
+def test_run_container_with_nested_exposes_guest_kvm(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    smolvm.run_container(
+        "cauldron-foo", "img:latest", "/p", "/p", 1000, 1000, nested=True
+    )
+    create_call = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "create"])
+    assert "--nested" in create_call
+
+
+def test_image_tar_path_uses_override_dir_and_sanitizes(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "tar"))
+    path = smolvm.image_tar_path("docker.io/library/debian:trixie-slim")
+    assert path == tmp_path / "tar" / "docker.io-library-debian-trixie-slim.tar"
+
+
+def test_image_exists_checks_tar(fake_smolvm):
+    tag = "cauldron-foo:latest"
+    tar = smolvm.image_tar_path(tag)
+    assert smolvm.image_exists(tag) is False
+    tar.parent.mkdir(parents=True, exist_ok=True)
+    tar.write_bytes(b"")
+    assert smolvm.image_exists(tag) is True
+
+
+def test_ensure_base_image_pulls_with_builder(fake_smolvm, monkeypatch):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    # the base image is not in the store, so it is pulled
+    fake_smolvm.respond(["image", "inspect"], returncode=1)
+    fake_smolvm.respond(["pull"], returncode=0)
+    assert smolvm.ensure_base_image("base:img") is True
+    assert fake_smolvm.calls() == [
+        ["image", "inspect", "base:img"],
+        ["pull", "base:img"],
+    ]
+
+
+def test_ensure_base_image_skips_pull_when_present(fake_smolvm, monkeypatch):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    # the base image is already in the store, so it is not pulled
+    fake_smolvm.respond(["image", "inspect"], returncode=0)
+    assert smolvm.ensure_base_image("base:img") is True
+    assert fake_smolvm.calls() == [["image", "inspect", "base:img"]]
+
+
+def test_ensure_base_image_false_without_builder(monkeypatch):
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: None)
+    assert smolvm.ensure_base_image() is False
+
+
+def test_build_image_builds_and_tags(fake_smolvm, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM base\n")
+    result = smolvm.build_image("tag:1", dockerfile, tmp_path, build_args={"A": "b"})
+    assert result.returncode == 0
+    assert fake_smolvm.calls() == [
+        [
+            "build",
+            "-t",
+            "tag:1",
+            "-f",
+            str(dockerfile),
+            "--build-arg",
+            "A=b",
+            str(tmp_path),
+        ]
+    ]
+
+
+def test_build_image_passes_build_network(fake_smolvm, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM base\n")
+    result = smolvm.build_image("tag:1", dockerfile, tmp_path, build_network="host")
+    assert result.returncode == 0
+    assert fake_smolvm.calls() == [
+        [
+            "build",
+            "-t",
+            "tag:1",
+            "-f",
+            str(dockerfile),
+            "--network",
+            "host",
+            str(tmp_path),
+        ]
+    ]
+
+
+def test_build_image_reports_no_builder(monkeypatch):
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: None)
+    result = smolvm.build_image("tag:1", "Dockerfile", ".")
+    assert result.returncode == 1
+    assert "no host builder" in result.stderr
+
+
+def test_build_project_image_builds_and_saves_tar(fake_smolvm, monkeypatch):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    fake_smolvm.respond(["build"], returncode=0)
+    fake_smolvm.respond(["save"], returncode=0)
+
+    result = smolvm.build_project_image(
+        "cauldron-foo:latest", 1000, 1000, base_image="base:img"
+    )
+    assert result.returncode == 0
+
+    calls = fake_smolvm.calls()
+    build_calls = [c for c in calls if c and c[0] == "build"]
+    save_calls = [c for c in calls if c and c[0] == "save"]
+    assert len(build_calls) == 1
+    assert "--build-arg" in build_calls[0]
+    assert "CAULDRON_BASE=base:img" in build_calls[0]
+    assert len(save_calls) == 1
+    assert save_calls[0][1] == "-o"
+    assert save_calls[0][-1] == "cauldron-foo:latest"
+
+    final = smolvm.image_tar_path("cauldron-foo:latest")
+    # The export targets a unique fresh sibling (mkstemp) that is renamed into
+    # place; assert the shape and that the temp is gone afterwards.
+    export_tmp = pathlib.Path(save_calls[0][2])
+    assert export_tmp.parent == final.parent
+    assert export_tmp.name.startswith(f".{final.name}.")
+    assert export_tmp.name.endswith(".tmp")
+    assert export_tmp != final
+    assert final.exists()
+    assert not export_tmp.exists()
+
+
+def test_build_project_image_overwrites_stale_tar(fake_smolvm, monkeypatch):
+    monkeypatch.setattr(
+        smolvm, "_host_builder", lambda: os.environ["CAULDRON_SMOLVM_PATH"]
+    )
+    fake_smolvm.respond(["build"], returncode=0)
+    fake_smolvm.respond(["save"], returncode=0)
+
+    final = smolvm.image_tar_path("cauldron-foo:latest")
+    final.parent.mkdir(parents=True, exist_ok=True)
+    final.write_bytes(b"stale-archive")
+
+    result = smolvm.build_project_image(
+        "cauldron-foo:latest", 1000, 1000, base_image="base:img"
+    )
+    assert result.returncode == 0
+    assert final.read_bytes() == b"fake-image-archive"
+    # no stray temp export is left behind
+    assert not list(final.parent.glob(f".{final.name}.*.tmp"))
+
+
+def test_container_exists(fake_smolvm):
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"], stdout=_ls_json(_machine("cauldron-foo"))
+    )
+    assert smolvm.container_exists("cauldron-foo") is True
+    assert smolvm.container_exists("cauldron-other") is False
+
+
+def test_container_running(fake_smolvm):
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(
+            _machine("cauldron-foo", state="running"),
+            _machine("cauldron-bar", state="stopped"),
+        ),
+    )
+    assert smolvm.container_running("cauldron-foo") is True
+    assert smolvm.container_running("cauldron-bar") is False
+
+
+def test_container_running_false_when_missing(fake_smolvm):
+    fake_smolvm.respond(["machine", "ls", "--json"], stdout=_ls_json())
+    assert smolvm.container_running("cauldron-foo") is False
+
+
+def test_container_id(fake_smolvm):
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"], stdout=_ls_json(_machine("cauldron-foo"))
+    )
+    assert smolvm.container_id("cauldron-foo") == "cauldron-foo"
+    assert smolvm.container_id("cauldron-other") is None
+
+
+def test_container_mounts_is_empty(fake_smolvm):
+    assert smolvm.container_mounts("cauldron-foo") == []
+
+
+def test_run_container_creates_and_starts(fake_smolvm):
+    image = "cauldron-foo:latest"
+    tar = smolvm.image_tar_path(image)
+
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+
+    result = smolvm.run_container("cauldron-foo", image, "/proj", "/proj", 1000, 1000)
+    assert result.returncode == 0
+
+    create = fake_smolvm.calls()[0]
+    assert create[:2] == ["machine", "create"]
+    assert "--name" in create and "cauldron-foo" in create
+    assert "-I" in create and str(tar) in create
+    assert "--label" in create and "cauldron.project_dir=/proj" in create
+    assert "--net" in create
+    assert "-u" in create and "1000:1000" in create
+    assert "-w" in create and "/proj" in create
+    assert "/proj:/proj" in create
+    assert create[-3:] == ["--", "sleep", "infinity"]
+    assert fake_smolvm.calls()[1][:2] == ["machine", "start"]
+
+
+def test_run_container_omits_sleep_with_entrypoint(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        entrypoint=True,
+    )
+    create = fake_smolvm.calls()[0]
+    assert "--" not in create
+
+
+def test_run_container_adds_volumes_ports_and_env(fake_smolvm, tmp_path):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    data = tmp_path / "data"
+    data.mkdir()
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        env={"FOO": "bar"},
+        mounts=[{"source": str(data), "target": "/data", "options": "ro"}],
+        ports=["8080:80"],
+    )
+    create = fake_smolvm.calls()[0]
+    assert "-e" in create and "FOO=bar" in create
+    assert f"{data}:/data:ro" in create
+    assert "-p" in create and "8080:80" in create
+
+
+def test_run_container_mounts_directory_via_v(fake_smolvm, tmp_path):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        mounts=[{"source": str(shared), "target": "/mnt/shared"}],
+    )
+    create = fake_smolvm.calls()[0]
+    assert f"{shared}:/mnt/shared" in create
+    assert "--mount-socket" not in create
+
+
+def test_run_container_mounts_socket_via_mount_socket(fake_smolvm, tmp_path):
+    agent = tmp_path / "agent.sock"
+    sock = socket.socket(socket.AF_UNIX)
+    sock.bind(str(agent))
+    sock.close()
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        mounts=[
+            {
+                "source": str(agent),
+                "target": "/run/user/1000/keyring/ssh",
+                "options": "ro",
+            }
+        ],
+    )
+    create = fake_smolvm.calls()[0]
+    assert "--mount-socket" in create
+    assert f"{agent}:/run/user/1000/keyring/ssh" in create
+    # smolvm has no read-only socket mount, so the ro suffix is dropped
+    assert f"{agent}:/run/user/1000/keyring/ssh:ro" not in create
+    assert f"-v {agent}" not in create
+
+
+def test_run_container_skips_unsupported_mounts_with_warning(fake_smolvm, tmp_path):
+    file = tmp_path / ".gitconfig"
+    file.write_text("[core]\n")
+    with pytest.warns(UserWarning, match="Skipping mount"):
+        smolvm.run_container(
+            "cauldron-foo",
+            "cauldron-foo:latest",
+            "/proj",
+            "/proj",
+            1000,
+            1000,
+            mounts=[
+                {"source": str(file), "target": "/home/cauldron/.gitconfig"},
+                {"source": "/nonexistent/source", "target": "/nope"},
+            ],
+        )
+    create = fake_smolvm.calls()[0]
+    assert str(file) not in create
+    assert "/nonexistent/source" not in create
+
+
+def test_run_container_ignores_devices(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    result = smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        devices=["/dev/kvm"],
+    )
+    assert result.returncode == 0
+    create = fake_smolvm.calls()[0]
+    assert "--device" not in create
+    assert "/dev/kvm" not in create
+
+
+def test_run_container_expands_path_placeholder(fake_smolvm, monkeypatch):
+    monkeypatch.setattr(smolvm, "_image_default_path", lambda tag: "/usr/bin:/bin")
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        env={"PATH": "${PATH}/opt/bin"},
+    )
+    create = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "create"])
+    assert "PATH=/usr/bin:/bin/opt/bin" in create
+
+
+def test_image_default_path_parses_env(monkeypatch, tmp_path):
+    import subprocess
+
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
+    monkeypatch.setattr(
+        smolvm,
+        "_run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout='["PATH=/usr/bin:/bin", "LANG=C"]',
+            stderr="",
+        ),
+    )
+    assert smolvm._image_default_path("img:tag") == "/usr/bin:/bin"
+
+
+def test_image_default_path_empty_when_inspect_fails(monkeypatch, tmp_path):
+    import subprocess
+
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
+    monkeypatch.setattr(
+        smolvm,
+        "_run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=1, stdout="", stderr="not found"
+        ),
+    )
+    assert smolvm._image_default_path("img:tag") == ""
+
+
+def test_image_default_path_reads_from_saved_tar(monkeypatch, tmp_path):
+    smoltar = tmp_path / "smoltar"
+    smoltar.mkdir()
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(smoltar))
+    _make_image_tar(
+        smoltar / "img-latest.tar", ["PATH=/opt/cool:/usr/bin:/bin", "LANG=C"]
+    )
+
+    def no_builder(*args, **kwargs):
+        raise AssertionError(
+            "builder store must not be consulted when the tar has PATH"
+        )
+
+    monkeypatch.setattr(smolvm, "_host_builder", no_builder)
+    assert smolvm._image_default_path("img:latest") == "/opt/cool:/usr/bin:/bin"
+
+
+def test_image_default_path_falls_back_to_builder(monkeypatch, tmp_path):
+    import subprocess
+
+    monkeypatch.setenv("CAULDRON_SMOLTAR_DIR", str(tmp_path / "none"))
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
+    monkeypatch.setattr(
+        smolvm,
+        "_run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args, returncode=0, stdout='["PATH=/usr/bin:/bin"]', stderr=""
+        ),
+    )
+    assert smolvm._image_default_path("img:latest") == "/usr/bin:/bin"
+
+
+def test_run_container_returns_create_failure(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=3)
+    result = smolvm.run_container(
+        "cauldron-foo", "cauldron-foo:latest", "/proj", "/proj", 1000, 1000
+    )
+    assert result.returncode == 3
+    calls = fake_smolvm.calls()
+    assert len(calls) == 1
+    assert calls[0][:2] == ["machine", "create"]
+
+
+def test_run_container_appends_known_hosts(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    smolvm.run_container(
+        "cauldron-foo",
+        "cauldron-foo:latest",
+        "/proj",
+        "/proj",
+        1000,
+        1000,
+        known_hosts=["example.com:1.2.3.4"],
+    )
+    create = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "create"])
+    # mapping is installed at create time, before the workload (mirroring
+    # Podman's --add-host), as a --init hosts(5) line ("ip hostname")
+    assert "--init" in create
+    init_cmd = create[create.index("--init") + 1]
+    assert "1.2.3.4 example.com" in init_cmd
+    assert "example.com:1.2.3.4" not in init_cmd
+    # no post-start exec writes /etc/hosts anymore
+    assert not [c for c in fake_smolvm.calls() if c[:2] == ["machine", "exec"]]
+
+
+def test_start_stop_restart_remove(fake_smolvm):
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    fake_smolvm.respond(["machine", "stop"], returncode=0)
+    fake_smolvm.respond(["machine", "delete"], returncode=0)
+    # restart_container probes state first; report the machine running so the
+    # stop-then-start path is exercised.
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(_machine("cauldron-foo", state="running")),
+    )
+
+    assert smolvm.start_container("cauldron-foo").returncode == 0
+    assert smolvm.stop_container("cauldron-foo") is True
+    assert smolvm.restart_container("cauldron-foo").returncode == 0
+    # force=False refuses to remove a running machine (the Podman contract);
+    # force=True does.
+    assert smolvm.remove_container("cauldron-foo") is False
+    assert smolvm.remove_container("cauldron-foo", force=True) is True
+
+    calls = fake_smolvm.calls()
+    assert any(c[:2] == ["machine", "start"] for c in calls)
+    assert any(c[:2] == ["machine", "stop"] for c in calls)
+    delete_calls = [c for c in calls if c[:2] == ["machine", "delete"]]
+    assert delete_calls == [
+        ["machine", "delete", "--name", "cauldron-foo", "--force"],
+    ]
+
+
+def test_remove_container_stopped_without_force(fake_smolvm):
+    # A stopped machine can be removed without force; smolvm's --force flag is
+    # still sent (required for non-interactive deletion).
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(_machine("cauldron-foo", state="stopped")),
+    )
+    fake_smolvm.respond(["machine", "delete"], returncode=0)
+    assert smolvm.remove_container("cauldron-foo") is True
+    calls = [c for c in fake_smolvm.calls() if c[:2] == ["machine", "delete"]]
+    assert calls == [["machine", "delete", "--name", "cauldron-foo", "--force"]]
+
+
+def test_restart_container_starts_stopped_machine_without_stop(fake_smolvm):
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(_machine("cauldron-foo", state="stopped")),
+    )
+    fake_smolvm.respond(["machine", "start"], returncode=0)
+    result = smolvm.restart_container("cauldron-foo")
+    assert result.returncode == 0
+    calls = fake_smolvm.calls()
+    assert [c for c in calls if c[:2] == ["machine", "stop"]] == []
+    assert [c for c in calls if c[:2] == ["machine", "start"]] == [
+        ["machine", "start", "--name", "cauldron-foo"]
+    ]
+
+
+def test_run_container_removes_orphan_when_start_fails(fake_smolvm):
+    fake_smolvm.respond(["machine", "create"], returncode=0)
+    fake_smolvm.respond(["machine", "start"], returncode=7)
+    fake_smolvm.respond(["machine", "delete"], returncode=0)
+    result = smolvm.run_container(
+        "cauldron-foo", "cauldron-foo:latest", "/p", "/p", 1000, 1000
+    )
+    assert result.returncode == 7
+    calls = fake_smolvm.calls()
+    assert [c for c in calls if c[:2] == ["machine", "delete"]] == [
+        ["machine", "delete", "--name", "cauldron-foo", "--force"]
+    ]
+
+
+def test_run_test_container_uses_tar_handoff(fake_smolvm, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(smolvm, "_host_builder", lambda: "podman")
+    monkeypatch.setattr(smolvm, "_base_image_exists", lambda base: True)
+
+    def fake_save(tag, dest):
+        dest = pathlib.Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"fake-archive")
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(smolvm, "_builder_save", fake_save)
+    fake_smolvm.respond(["machine", "run"], returncode=0)
+    assert smolvm.run_test_container("busybox") is True
+    run = next(c for c in fake_smolvm.calls() if c[:2] == ["machine", "run"])
+    image = run[run.index("--image") + 1]
+    assert image.endswith(".tar")
+    assert image != "busybox"
+
+
+def test_container_shell_probes_printenv(fake_smolvm):
+    fake_smolvm.respond(["machine", "exec"], stdout="/bin/zsh\n")
+    assert smolvm.container_shell("cauldron-foo") == "/bin/zsh"
+    assert fake_smolvm.calls() == [
+        ["machine", "exec", "--name", "cauldron-foo", "--", "printenv", "SHELL"]
+    ]
+
+
+def test_container_shell_falls_back_when_unset(fake_smolvm):
+    fake_smolvm.respond(["machine", "exec"], returncode=1)
+    assert smolvm.container_shell("cauldron-foo") == "bash"
+
+
+def test_exec_in_container(fake_smolvm):
+    code = smolvm.exec_in_container("cauldron-foo", "ls", args=["-la"])
+    assert code == 0
+    assert fake_smolvm.calls() == [
+        ["machine", "exec", "--name", "cauldron-foo", "--", "ls", "-la"]
+    ]
+
+
+def test_exec_in_container_interactive_tty(fake_smolvm):
+    smolvm.exec_in_container("cauldron-foo", "bash", interactive=True, tty=True)
+    assert fake_smolvm.calls() == [
+        ["machine", "exec", "--name", "cauldron-foo", "-i", "-t", "--", "bash"]
+    ]
+
+
+def test_exec_hook_in_container(fake_smolvm):
+    assert (
+        smolvm.exec_hook_in_container(
+            "cauldron-foo", "/usr/local/share/cauldron/hook.sh"
+        )
+        == 0
+    )
+    assert fake_smolvm.calls() == [
+        [
+            "machine",
+            "exec",
+            "--name",
+            "cauldron-foo",
+            "--",
+            "/usr/local/share/cauldron/hook.sh",
+        ]
+    ]
+
+
+def test_exec_check_with_user(fake_smolvm):
+    assert smolvm.exec_check("cauldron-foo", ["test", "-f", "/x"], user="0") is True
+    assert fake_smolvm.calls() == [
+        [
+            "machine",
+            "exec",
+            "--name",
+            "cauldron-foo",
+            "--user",
+            "0",
+            "--",
+            "test",
+            "-f",
+            "/x",
+        ]
+    ]
+
+
+def test_exec_capture(fake_smolvm):
+    fake_smolvm.respond(["machine", "exec"], stdout="hello\n")
+    assert smolvm.exec_capture("cauldron-foo", ["echo", "hello"]) == "hello"
+
+
+def test_exec_with_stdin(fake_smolvm):
+    assert smolvm.exec_with_stdin("cauldron-foo", ["cat"], "data\n", user="0") is True
+    assert fake_smolvm.calls() == [
+        ["machine", "exec", "--name", "cauldron-foo", "-i", "--user", "0", "--", "cat"]
+    ]
+
+
+def test_list_containers_filters_cauldron_machines(fake_smolvm):
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(
+            _machine(
+                "cauldron-foo",
+                labels={"cauldron.project_dir": "/proj"},
+                ports=1,
+            ),
+            _machine("other-machine"),
+        ),
+    )
+    listed = smolvm.list_containers()
+    assert [c["name"] for c in listed] == ["cauldron-foo"]
+    assert listed[0]["project_dir"] == "/proj"
+    assert listed[0]["ports"] == ["1"]
+    assert listed[0]["host_ports"] == []
+
+
+def test_list_containers_running_only_by_default(fake_smolvm):
+    fake_smolvm.respond(
+        ["machine", "ls", "--json"],
+        stdout=_ls_json(
+            _machine("cauldron-running", state="running"),
+            _machine("cauldron-stopped", state="stopped"),
+        ),
+    )
+    assert [c["name"] for c in smolvm.list_containers()] == ["cauldron-running"]
+    assert [c["name"] for c in smolvm.list_containers(all_containers=True)] == [
+        "cauldron-running",
+        "cauldron-stopped",
+    ]
+
+
+def test_list_containers_empty_on_failure(fake_smolvm):
+    fake_smolvm.respond(["machine", "ls", "--json"], returncode=1)
+    assert smolvm.list_containers() == []
+
+
+def test_format_port():
+    assert smolvm._format_port("8080:80") == "8080:80"
+    assert smolvm._format_port("127.0.0.1:8080:80") == "8080:80"
+    assert smolvm._format_port("8080:80/tcp") == "8080:80/tcp"
+    assert smolvm._format_port("80") == "80:80"
+
+
+def test_format_volume():
+    assert smolvm._format_volume({"source": "/a", "target": "/b"}) == "/a:/b"
+    assert (
+        smolvm._format_volume({"source": "/a", "target": "/b", "options": "ro"})
+        == "/a:/b:ro"
+    )
+
+
+def test_format_socket_mount():
+    assert (
+        smolvm._format_socket_mount(
+            {
+                "source": "/run/user/1000/keyring/ssh",
+                "target": "/run/user/1000/keyring/ssh",
+            }
+        )
+        == "/run/user/1000/keyring/ssh:/run/user/1000/keyring/ssh"
+    )
+    # options are ignored (no read-only socket mount in smolvm)
+    assert (
+        smolvm._format_socket_mount({"source": "/a", "target": "/b", "options": "ro"})
+        == "/a:/b"
+    )
+
+
+def test_port_in_use_detection():
+    assert smolvm.is_port_in_use_error("Error: address already in use")
+    assert smolvm.is_port_in_use_error("") is False
+    assert smolvm.port_from_error("bind 0.0.0.0:8080: address already in use") == 8080
+    assert smolvm.port_from_error("nope") is None
+
+
+def test_port_from_error_prefers_smolvm_publish_shape():
+    """The real 1.35.3 failure names the guest port after the host port."""
+    stderr = (
+        "Error: agent operation failed: start machine: agent operation failed: "
+        "configure virtio-net: failed to start virtio network runtime: cannot "
+        "publish host TCP 127.0.0.1:22189 to guest TCP 3000: Address already "
+        "in use (os error 98)"
+    )
+    assert smolvm.is_port_in_use_error(stderr) is True
+    assert smolvm.port_from_error(stderr) == 22189
+
+
+def test_find_port_owner_returns_empty(fake_smolvm):
+    # smolvm does not expose host:guest mappings, so a port can't be attributed
+    # to a specific machine.
+    assert smolvm.find_port_owner(8080) == []
+    assert smolvm.find_port_owner(None) == []
+
+
+def test_ssh_proxy_command(fake_smolvm):
+    command = smolvm.ssh_proxy_command("cauldron-foo")
+    assert "machine exec --name cauldron-foo" in command
+    assert "--user 0 -i --" in command
+    assert "/usr/sbin/sshd -i" in command
+
+
+def test_ssh_proxy_command_quotes_unsafe_name(fake_smolvm):
+    # A user-supplied machine name with shell metacharacters must be quoted,
+    # since OpenSSH runs the ProxyCommand through a shell.
+    name = "cauldron; rm -rf /"
+    command = smolvm.ssh_proxy_command(name)
+    assert shlex.quote(name) in command
+    assert f"--name {name}" not in command
+
+
+def test_host_builder_prefers_configured_podman_path(monkeypatch):
+    monkeypatch.setenv("CAULDRON_PODMAN_PATH", "/usr/local/bin/cauldron-podman")
+    assert smolvm._host_builder() == "/usr/local/bin/cauldron-podman"

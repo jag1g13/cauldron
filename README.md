@@ -4,7 +4,7 @@ Cauldron is a developer-friendly command-line tool for creating containerised de
 
 ## Features
 
-- Rootless Podman containers.
+- Rootless Podman containers, with an opt-in `smolvm` microVM backend.
 - Per-project environments identified by directory name.
 - Custom Dockerfiles layered on top of the configured base image via the `CAULDRON_BASE` build argument.
 - Environment variable customisation via `~/.config/cauldron/cauldron.toml` or `.cauldron/cauldron.toml`.
@@ -36,6 +36,43 @@ Cauldron reads optional TOML configuration files. Project settings override glob
 
 - Global: `~/.config/cauldron/cauldron.toml`
 - Project: `.cauldron/cauldron.toml`
+
+### Runtime backend
+
+By default each project runs in a rootless Podman container. An opt-in `smolvm`
+backend runs the project in a smol microVM instead:
+
+```toml
+[backend]
+type = "smolvm"
+```
+
+This requires the `smolvm` binary on your `PATH` (override its location with
+`CAULDRON_SMOLVM_PATH`) and a host with KVM: `cauldron check` verifies the
+device is writable by your user and prints a remedy when it is not (inside
+containers, only a named ACL such as
+`sudo setfacl -m u:<uid>:rw /dev/kvm` crosses the user namespace; host `kvm`
+group membership does not). On hosts whose logind uaccess machinery erases
+that ACL on kvm uevents, `scripts/kvm-acl-fix.sh` makes it durable — see
+`scripts/README.md`. The project image is still built
+with your host builder (`podman` or `docker`) and handed to smolvm as a
+`docker save` tar, so custom Dockerfiles and the `CAULDRON_BASE` build argument
+work the same way. Podman-only options such as `podman_socket` are ignored under
+the smolvm backend. Configured mounts are classified by source path:
+directories are shared over virtiofs, Unix sockets (e.g. `$SSH_AUTH_SOCK`)
+are passed with `--mount-socket` (no read-only form, so `ro` is ignored),
+and plain files or missing paths are skipped with a warning.
+
+Machines can expose nested KVM to the guest, so it can run its own VMs (see
+the smolvm-in-smolvm notes in `docs/nested-cauldron.md`):
+
+```toml
+[backend.smolvm]
+nested = true
+```
+
+This passes smolvm's `--nested` on machine creation; the host must support
+nested KVM or smolvm fails the start cleanly.
 
 ### Base image
 
@@ -146,6 +183,36 @@ Project ports override global ports when they refer to the same host port.
 
 If a container fails to start because a host port is already in use, `cauldron up` names the other Cauldron container (if any) that holds the port, so you know which one to stop or reconfigure.
 
+### Network
+
+Two separate `[container]` keys control networking, each passed straight to the runtime's `--network` flag, and each unset by default (the runtime's own mode — a private bridge with NAT):
+
+- `build_network` — the network used for image **build** steps
+- `network` — the network of the **running project container**
+
+Set them to `host` when the default container networking cannot resolve names or reach the network — for example inside a microVM or VM whose nested container networking is degraded, where `host` runs the process in the host's own network namespace (for the guest, that is the VM; with `podman_socket`, the machine hosting the Podman service). The smolvm backend ignores `network` (machines use smolvm's own networking).
+
+```toml
+[container]
+build_network = "host"
+network = "host"
+```
+
+In host networking mode published ports (`ports`) are discarded, with a warning from the runtime as the container starts.
+
+### Devices
+
+Use the `[container]` table to pass host device nodes into the container, for example `/dev/kvm`.
+
+```toml
+[container]
+devices = [
+  "/dev/kvm",
+]
+```
+
+Each entry is passed to Podman's `--device` flag. A device node's access is governed by its permissions on the host (ownership plus any named ACL), not by how it reaches the container — `--device` and a plain bind mount behave the same way. Grant the container user access on the host first, for example by adding it to the `kvm` group or setting a named ACL (`setfacl -m u:<uid>:rw /dev/kvm`). Project entries override global entries for the same host path.
+
 ### Known hosts
 
 Use the `[container]` table to append entries to the container's `/etc/hosts` file for custom domain resolution.
@@ -191,13 +258,17 @@ Tests run against a real Podman when one is reachable — a local engine, or the
 mounted static `podman-remote` when run inside a cauldron — and skip otherwise.
 Argument-level assertions use a recording fake executable rather than mocking
 Podman in-process. Long-running tests are deselected by default; run them with
-`uv run pytest -m slow`.
+`uv run pytest -m slow`. The slow set also drives a real `smolvm` end to end
+— machine create/start/exec/stop/delete and the host-port conflict error —
+when a real `smolvm` is on `PATH` and `/dev/kvm` is writable by this user
+(works both on a host and inside a cauldron), and skips otherwise.
 
 ## Documentation
 
 - [Architecture and design](docs/spec/overview.md)
 - [CLI reference](docs/spec/cli.md)
 - [Configuration reference](docs/spec/config.md)
+- [Nested Cauldron: smolvm inside Podman](docs/nested-cauldron.md)
 
 ## Status
 

@@ -4,7 +4,7 @@ import sys
 
 import click
 
-from cauldron import config, devcontainers, podman, podman_remote, project, ssh, vscode
+from cauldron import backend, config, devcontainers, podman_remote, project, ssh, vscode
 
 
 def _read_data_file(name):
@@ -20,38 +20,50 @@ def cli(ctx, verbose):
     """Cauldron — containerised development environments with rootless Podman."""
     ctx.ensure_object(dict)
     ctx.obj["verbose"] = verbose
-    podman.set_verbose(verbose)
+    try:
+        backend.active().set_verbose(verbose)
+    except ValueError as exc:
+        # A malformed backend type would otherwise surface as a raw traceback
+        # out of this group callback; turn it into a clean configuration error.
+        raise click.ClickException(str(exc)) from exc
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
 
 
 @cli.command()
 def check():
-    """Check that dependencies are installed and Podman can pull, build, and run."""
+    """Check that the configured runtime can pull, build, and run."""
     cfg = config.load_config()
     base_image = config.base_image(cfg)
+    rt = backend.active()
+    backend_name = config.backend_type(cfg)
     podman_socket = config.container_podman_socket(cfg)
 
-    if podman_remote.running_in_remote():
-        click.echo("Running inside an existing cauldron (host Podman in use).")
-    else:
-        click.echo("Not running inside a cauldron.")
+    if backend_name == "podman":
+        if podman_remote.running_in_remote():
+            click.echo("Running inside an existing cauldron (host Podman in use).")
+        else:
+            click.echo("Not running inside a cauldron.")
 
-    steps = [
-        ("podman is installed", podman.version),
-        ("base image is available", lambda: podman.ensure_base_image(base_image)),
-        ("test container can run", lambda: podman.run_test_container(base_image)),
+    steps = [(f"{backend_name} is installed", rt.version)]
+    if backend_name == "smolvm":
+        steps.append(("KVM device is available and writable", rt.kvm_check))
+    steps += [
+        ("base image is available", lambda: rt.ensure_base_image(base_image)),
+        ("test environment can run", lambda: rt.run_test_container(base_image)),
     ]
 
     for description, step in steps:
         click.echo(f"Checking {description}... ", nl=False)
-        if step():
+        outcome = step()
+        ok, hint = outcome if isinstance(outcome, tuple) else (outcome, "")
+        if ok:
             click.echo("ok")
         else:
             click.echo("failed")
-            raise click.ClickException(f"Check failed: {description}")
+            raise click.ClickException(hint or f"Check failed: {description}")
 
-    if podman_socket:
+    if backend_name == "podman" and podman_socket:
         click.echo("Checking host Podman socket... ", nl=False)
         try:
             # When already running against the host socket there is nothing to
@@ -119,7 +131,7 @@ def _run_lifecycle_hook(container, hook, scripts):
         return True
     script_path = f"{SCRIPT_INSTALL_PATH}/{hook}.sh"
     click.echo(f"Running {hook} script...")
-    return podman.exec_hook_in_container(container, script_path) == 0
+    return backend.active().exec_hook_in_container(container, script_path) == 0
 
 
 def _ensure_runtime_dir(container, uid, gid):
@@ -137,9 +149,14 @@ def _ensure_runtime_dir(container, uid, gid):
     ancestors is a mount point other than a container-local tmpfs:
     chown/chmod through a bind or volume mount would change the host
     filesystem, or fail on a read-only mount.
+
+    This is a Podman-specific quirk (auto-created bind-mount parents); it does
+    not apply to the smolvm backend.
     """
+    if config.backend_type(config.load_config()) == "smolvm":
+        return
     runtime_dir = f"/run/user/{uid}"
-    mounts = podman.container_mounts(container)
+    mounts = backend.active().container_mounts(container)
     for mount in mounts:
         destination = mount.get("Destination", "")
         if runtime_dir != destination and not runtime_dir.startswith(destination + "/"):
@@ -150,7 +167,7 @@ def _ensure_runtime_dir(container, uid, gid):
         mount.get("Destination", "").startswith(runtime_dir + "/") for mount in mounts
     ):
         return
-    ok = podman.exec_check(
+    ok = backend.active().exec_check(
         container,
         [
             "sh",
@@ -163,7 +180,7 @@ def _ensure_runtime_dir(container, uid, gid):
     if not ok:
         raise click.ClickException(
             f"Failed to fix ownership of {runtime_dir} in {container}. "
-            f"Repair it with: {podman._podman_bin()} exec -u 0 {container}"
+            f"Repair it with: {backend.active()._podman_bin()} exec -u 0 {container}"
             f" chown {uid}:{gid} {runtime_dir}"
         )
 
@@ -194,17 +211,17 @@ def _port_conflict_hint(result):
     hint string, or ``""`` if the failure is not a port conflict.
     """
     stderr = getattr(result, "stderr", "") or ""
-    if not podman.is_port_in_use_error(stderr):
+    if not backend.active().is_port_in_use_error(stderr):
         return ""
 
-    port = podman.port_from_error(stderr)
+    port = backend.active().port_from_error(stderr)
     if port is None:
         return (
             "\nA host port is already in use. Find what owns it (e.g. "
             "`ss -tlnp`) or change this project's port in cauldron.toml."
         )
 
-    owners = podman.find_port_owner(port)
+    owners = backend.active().find_port_owner(port)
     if owners:
         return (
             f"\nPort {port} is already in use by cauldron container "
@@ -293,32 +310,33 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     base_image = config.base_image(cfg)
     scripts = config.container_scripts(cfg)
     podman_socket = config.container_podman_socket(cfg)
+    build_network = config.container_build_network(cfg)
     has_entrypoint = "entrypoint" in scripts
 
-    if podman.container_exists(container):
+    if backend.active().container_exists(container):
         if restart:
             if build:
                 click.echo(
                     f"Stopping and removing existing container {container} for rebuild..."
                 )
-                if podman.container_running(container) and not podman.stop_container(
+                if backend.active().container_running(
                     container
-                ):
+                ) and not backend.active().stop_container(container):
                     raise click.ClickException(f"Failed to stop container {container}.")
-                if not podman.remove_container(container):
+                if not backend.active().remove_container(container):
                     raise click.ClickException(
                         f"Failed to remove container {container}."
                     )
                 # Fall through to build and recreate the container.
             else:
                 click.echo(f"Restarting container {container}...")
-                result = podman.restart_container(container)
+                result = backend.active().restart_container(container)
                 if result.returncode != 0:
                     raise click.ClickException(
                         f"Failed to restart container {container}."
                         f"{_port_conflict_hint(result)}"
                     )
-                if not podman.container_running(container):
+                if not backend.active().container_running(container):
                     raise click.ClickException(
                         f"Container {container} did not restart."
                     )
@@ -330,17 +348,17 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 click.echo(f"Container {container} is running.")
                 return
         else:
-            if podman.container_running(container):
+            if backend.active().container_running(container):
                 _ensure_runtime_dir(container, uid, gid)
                 return
             click.echo(f"Starting existing container {container}...")
-            result = podman.start_container(container)
+            result = backend.active().start_container(container)
             if result.returncode != 0:
                 raise click.ClickException(
                     f"Failed to start container {container}."
                     f"{_port_conflict_hint(result)}"
                 )
-            if not podman.container_running(container):
+            if not backend.active().container_running(container):
                 raise click.ClickException(f"Container {container} did not start.")
             _ensure_runtime_dir(container, uid, gid)
             if not _run_lifecycle_hook(container, "post_start", scripts):
@@ -349,14 +367,14 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
             return
 
     if no_build:
-        if not podman.image_exists(image):
+        if not backend.active().image_exists(image):
             raise click.ClickException(
                 f"Image '{image}' is missing and --no-build was specified."
             )
-    elif build or not podman.image_exists(image):
+    elif build or not backend.active().image_exists(image):
         click.echo("Building project image...")
-        resolved_base = base_image or podman.BASE_IMAGE
-        if not podman.ensure_base_image(resolved_base):
+        resolved_base = base_image or backend.active().BASE_IMAGE
+        if not backend.active().ensure_base_image(resolved_base):
             raise click.ClickException("Failed to ensure base image.")
 
         dockerfile = project.find_dockerfile()
@@ -364,23 +382,25 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         if dockerfile:
             intermediate = f"{image.split(':')[0]}-intermediate:latest"
             click.echo(f"Building intermediate image from {dockerfile}...")
-            result = podman.build_image(
+            result = backend.active().build_image(
                 intermediate,
                 dockerfile,
                 dockerfile.parent,
                 build_args={"CAULDRON_BASE": resolved_base},
+                build_network=build_network,
             )
             if result.returncode != 0:
                 new_base = _recover_template_base(result, resolved_base, project_dir)
                 if new_base:
-                    if not podman.ensure_base_image(new_base):
+                    if not backend.active().ensure_base_image(new_base):
                         raise click.ClickException("Failed to ensure base image.")
                     click.echo(f"Retrying intermediate build with {new_base}...")
-                    result = podman.build_image(
+                    result = backend.active().build_image(
                         intermediate,
                         dockerfile,
                         dockerfile.parent,
                         build_args={"CAULDRON_BASE": new_base},
+                        build_network=build_network,
                     )
                 if result.returncode != 0:
                     raise click.ClickException(
@@ -389,27 +409,29 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                     )
 
         project_base = intermediate or resolved_base
-        result = podman.build_project_image(
+        result = backend.active().build_project_image(
             image,
             uid,
             gid,
             project_base,
             scripts=scripts,
             project_dir=project_dir,
+            build_network=build_network,
         )
         if not _build_ok(result):
             new_base = _recover_template_base(result, project_base, project_dir)
             if new_base:
-                if not podman.ensure_base_image(new_base):
+                if not backend.active().ensure_base_image(new_base):
                     raise click.ClickException("Failed to ensure base image.")
                 click.echo(f"Retrying project image build with {new_base}...")
-                result = podman.build_project_image(
+                result = backend.active().build_project_image(
                     image,
                     uid,
                     gid,
                     new_base,
                     scripts=scripts,
                     project_dir=project_dir,
+                    build_network=build_network,
                 )
             if not _build_ok(result):
                 raise click.ClickException(
@@ -417,23 +439,26 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
                 )
 
     click.echo(f"Starting container {container}...")
-    nested = podman_remote.running_in_remote()
     socket_path = None
     client_path = None
-    if podman_socket:
-        try:
-            if nested:
-                socket_path, client_path = podman_remote.host_backend_paths()
-            else:
-                socket_path = podman_remote.ensure_socket()
-                client_path = podman_remote.ensure_client()
-        except podman_remote.RemoteError as exc:
-            raise click.ClickException(str(exc)) from exc
-    if nested:
-        # Nested: reuse this cauldron's host mounts, since re-deriving them from
-        # the config would expand $HOME etc. to cauldron-local paths the host
-        # cannot bind-mount.
-        mounts = podman_remote.host_sibling_mounts(project_dir)
+    if config.backend_type(cfg) == "podman":
+        nested = podman_remote.running_in_remote()
+        if podman_socket:
+            try:
+                if nested:
+                    socket_path, client_path = podman_remote.host_backend_paths()
+                else:
+                    socket_path = podman_remote.ensure_socket()
+                    client_path = podman_remote.ensure_client()
+            except podman_remote.RemoteError as exc:
+                raise click.ClickException(str(exc)) from exc
+        if nested:
+            # Nested: reuse this cauldron's host mounts, since re-deriving them
+            # from the config would expand $HOME etc. to cauldron-local paths
+            # the host cannot bind-mount.
+            mounts = podman_remote.host_sibling_mounts(project_dir)
+        else:
+            mounts = config.container_mounts(cfg)
     else:
         mounts = config.container_mounts(cfg)
     # The env is always the requested project's own config. When nested, its
@@ -441,7 +466,7 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     # host paths inherited from the parent, and the target image's defaults
     # (PATH, etc.) are left intact rather than being replaced by the parent's.
     env = config.container_env(cfg)
-    result = podman.run_container(
+    result = backend.active().run_container(
         name=container,
         image=image,
         workdir=project_dir,
@@ -452,16 +477,19 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
         mounts=mounts,
         ports=config.container_ports(cfg),
         known_hosts=config.container_known_hosts(cfg),
+        devices=config.container_devices(cfg),
         podman_socket=socket_path,
         podman_client=client_path,
         entrypoint=has_entrypoint,
+        nested=config.backend_smolvm_nested(cfg),
+        network=config.container_network(cfg),
     )
     if result.returncode != 0:
         raise click.ClickException(
             f"Failed to start container {container}.{_port_conflict_hint(result)}"
         )
 
-    if not podman.container_running(container):
+    if not backend.active().container_running(container):
         raise click.ClickException(f"Container {container} did not start.")
 
     _ensure_runtime_dir(container, uid, gid)
@@ -478,10 +506,21 @@ def _start_project_container(container, build=False, no_build=False, restart=Fal
     "--no-build", is_flag=True, help="Never build; fail if the image is missing."
 )
 def up(name, build, no_build):
-    """Start or restart the project's container, building the image if needed."""
+    """Start or restart the project's container, building the image if needed.
+
+    Also sets up Remote-SSH (host key pair, in-container sshd and the SSH
+    config) so the container is reachable via `ssh` without VSCode. Setup is
+    best-effort: a failure is reported but does not prevent the container from
+    starting.
+    """
     container = project.container_name(override=name)
 
     _start_project_container(container, build=build, no_build=no_build, restart=True)
+
+    try:
+        ssh.ensure_remote_ssh(container)
+    except ssh.SSHError as exc:
+        click.echo(f"warning: Remote-SSH setup skipped: {exc}")
 
 
 @cli.command()
@@ -490,11 +529,11 @@ def stop(name):
     """Stop the project's container."""
     container = project.container_name(override=name)
 
-    if not podman.container_exists(container):
+    if not backend.active().container_exists(container):
         raise click.ClickException(f"Container '{container}' does not exist.")
 
     click.echo(f"Stopping container {container}...")
-    if not podman.stop_container(container):
+    if not backend.active().stop_container(container):
         raise click.ClickException(f"Failed to stop container {container}.")
 
     click.echo(f"Container {container} stopped.")
@@ -509,17 +548,17 @@ def rm(name, force):
     """Remove the project's container."""
     container = project.container_name(override=name)
 
-    if not podman.container_exists(container):
+    if not backend.active().container_exists(container):
         raise click.ClickException(f"Container '{container}' does not exist.")
 
-    if podman.container_running(container) and not force:
+    if backend.active().container_running(container) and not force:
         raise click.ClickException(
             f"Container '{container}' is running. "
             "Stop it first or use --force to remove it."
         )
 
     click.echo(f"Removing container {container}...")
-    if not podman.remove_container(container, force=force):
+    if not backend.active().remove_container(container, force=force):
         raise click.ClickException(f"Failed to remove container {container}.")
 
     click.echo(f"Container {container} removed.")
@@ -531,7 +570,7 @@ def rm(name, force):
 )
 def ps(all_containers):
     """List Cauldron-managed containers."""
-    containers = podman.list_containers(all_containers=all_containers)
+    containers = backend.active().list_containers(all_containers=all_containers)
 
     if not containers:
         click.echo("No Cauldron containers.")
@@ -587,10 +626,10 @@ def exec_command(name, interactive, tty, command, args):
         tty = detected_tty
 
     if command is None:
-        command = podman.container_shell(container)
+        command = backend.active().container_shell(container)
         args = ()
 
-    exit_code = podman.exec_in_container(
+    exit_code = backend.active().exec_in_container(
         container, command, args=args, interactive=interactive, tty=tty
     )
     raise SystemExit(exit_code)
@@ -610,9 +649,7 @@ def code(name):
         )
 
     try:
-        ssh.ensure_keypair()
-        ssh.ensure_container_ssh(container)
-        ssh.ensure_ssh_config(container)
+        ssh.ensure_remote_ssh(container)
     except ssh.SSHError as exc:
         raise click.ClickException(str(exc)) from exc
 

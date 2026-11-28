@@ -136,6 +136,37 @@ def _known_host_key(entry):
     return entry.split(":", 1)[0]
 
 
+def _device_key(device):
+    """Return the merge key (host path) for a device passthrough string."""
+    if not isinstance(device, str):
+        raise ValueError(f"Device must be a string, got {type(device).__name__}")
+    return device.split(":", 1)[0]
+
+
+def _merge_devices(global_devices, project_devices, warn):
+    """Merge device lists by host path, project overrides global."""
+    seen = {}
+
+    def _add(source_name, device):
+        key = _device_key(device)
+        if key in seen:
+            previous_source, _ = seen[key]
+            if previous_source == "global" and source_name == "project":
+                warn(f"Project device overrides global device for path {key!r}")
+            elif previous_source == source_name:
+                warn(f"Duplicate {source_name} device for path {key!r}")
+            else:
+                warn(f"Device for path {key!r} is defined more than once")
+        seen[key] = (source_name, device)
+
+    for device in global_devices:
+        _add("global", device)
+    for device in project_devices:
+        _add("project", device)
+
+    return [device for _, device in seen.values()]
+
+
 def _merge_known_hosts(global_hosts, project_hosts, warn):
     """Merge known-hosts lists by hostname, project overrides global."""
     seen = {}
@@ -162,14 +193,34 @@ def _merge_known_hosts(global_hosts, project_hosts, warn):
     return [entry for _, entry in seen.values()]
 
 
+def _merge_backend(global_backend, project_backend, warn):
+    """Merge ``[backend]`` tables; project overrides global by key.
+
+    Nested per-provider tables (e.g. ``[backend.smolvm]``) are merged
+    key-by-key so a project setting overrides only that specific key.
+    """
+    merged = dict(global_backend)
+    for key, value in project_backend.items():
+        if isinstance(value, dict):
+            base = merged.get(key)
+            if base is not None and not isinstance(base, dict):
+                raise ValueError(f"[backend.{key}] must be a table")
+            merged[key] = {**(base or {}), **value}
+        else:
+            if key == "type" and key in merged and merged[key] != value:
+                warn(f"Project backend type {value!r} overrides global {merged[key]!r}")
+            merged[key] = value
+    return merged
+
+
 def load_config(project_dir=None, warn=None):
     """Load merged global and project configuration.
 
     Project config overrides global config. The ``env`` table is merged at the
     key level. The ``container`` table is merged key-by-key, but ``mounts`` are
-    merged by ``target``, ``ports`` by host port, and ``known_hosts`` by
-    hostname so that project values override global values without discarding
-    unrelated entries.
+    merged by ``target``, ``ports`` by host port, ``known_hosts`` by hostname,
+    and ``devices`` by host device path so that project values override
+    global values without discarding unrelated entries.
     """
     if warn is None:
         warn = warnings.warn
@@ -196,7 +247,7 @@ def load_config(project_dir=None, warn=None):
 
     # Merge simple container keys directly.
     for key, value in project_container.items():
-        if key not in ("mounts", "ports", "known_hosts"):
+        if key not in ("mounts", "ports", "known_hosts", "devices"):
             global_container[key] = value
 
     if "mounts" in global_container or "mounts" in project_container:
@@ -213,6 +264,13 @@ def load_config(project_dir=None, warn=None):
             warn,
         )
 
+    if "devices" in global_container or "devices" in project_container:
+        global_container["devices"] = _merge_devices(
+            global_container.get("devices", []),
+            project_container.get("devices", []),
+            warn,
+        )
+
     if "known_hosts" in global_container or "known_hosts" in project_container:
         global_container["known_hosts"] = _merge_known_hosts(
             global_container.get("known_hosts", []),
@@ -223,12 +281,39 @@ def load_config(project_dir=None, warn=None):
     if global_container:
         config["container"] = global_container
 
+    global_backend = config.get("backend", {})
+    project_backend = project_config.get("backend", {})
+    if global_backend or project_backend:
+        config["backend"] = _merge_backend(global_backend, project_backend, warn)
+
     return config
 
 
 def base_image(config):
     """Return the configured base image, or None to use the default."""
     return config.get("container", {}).get("base_image")
+
+
+def backend_type(config):
+    """Return the configured backend type, defaulting to ``podman``."""
+    return config.get("backend", {}).get("type", "podman")
+
+
+def backend_smolvm(config):
+    """Return the ``[backend.smolvm]`` settings table (empty if absent)."""
+    table = config.get("backend", {}).get("smolvm")
+    return dict(table) if isinstance(table, dict) else {}
+
+
+def backend_smolvm_nested(config):
+    """Return whether smol machines should expose nested KVM to the guest.
+
+    ``[backend.smolvm] nested = true`` passes smolvm's ``--nested`` on
+    ``machine create``, so the guest gets its own ``/dev/kvm`` and can run
+    VMs itself. Requires the host to support nested KVM; smolvm fails the
+    start cleanly when it does not.
+    """
+    return bool(backend_smolvm(config).get("nested", False))
 
 
 def set_base_image(project_dir, new_image):
@@ -304,6 +389,39 @@ def container_mounts(config):
 def container_ports(config):
     """Return port forwarding strings for the container runtime."""
     return list(config.get("container", {}).get("ports", []))
+
+
+def container_devices(config):
+    """Return host device paths for the container runtime.
+
+    Each entry is a string in Podman's ``--device`` syntax (for example
+    ``/dev/kvm``), passed through so host devices are accessible inside the
+    container.
+    """
+    return list(config.get("container", {}).get("devices", []))
+
+
+def container_build_network(config):
+    """Return the network for image builds, or None for the builder default.
+
+    The value is passed to the host builder's ``--network`` flag (for example
+    ``host``) so build steps can resolve DNS and reach the network when the
+    builder's default container networking cannot (e.g. inside a microVM
+    whose container networking is degraded).
+    """
+    value = config.get("container", {}).get("build_network")
+    return value if isinstance(value, str) and value else None
+
+
+def container_network(config):
+    """Return the network for the project container, or None for the default.
+
+    The value is passed to the container runtime's ``--network`` flag (for
+    example ``host``) when the runtime's own default networking cannot
+    resolve names or reach the network.
+    """
+    value = config.get("container", {}).get("network")
+    return value if isinstance(value, str) and value else None
 
 
 def container_known_hosts(config):

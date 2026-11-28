@@ -2,11 +2,10 @@
 
 import pathlib
 import re
-import shlex
 import shutil
 import subprocess
 
-from cauldron import podman
+from cauldron import backend
 
 SSH_DIR = pathlib.Path.home() / ".config" / "cauldron" / "ssh"
 PRIVATE_KEY = SSH_DIR / "id_ed25519"
@@ -20,7 +19,6 @@ INCLUDE_MARKER_BEGIN = "# BEGIN cauldron"
 INCLUDE_MARKER_END = "# END cauldron"
 
 _CONTAINER_USER = "cauldron"
-_CONTAINER_HOME = podman.CONTAINER_HOME
 
 
 class SSHError(Exception):
@@ -79,7 +77,9 @@ def ensure_container_ssh(container):
     missing. Raises :class:`SSHError` if the container lacks openssh-server
     (needs rebuild) or if any setup step fails.
     """
-    if not podman.exec_check(container, ["test", "-f", "/usr/sbin/sshd"]):
+    home = backend.active().CONTAINER_HOME
+
+    if not backend.active().exec_check(container, ["test", "-f", "/usr/sbin/sshd"]):
         raise SSHError(
             "OpenSSH server not found in container. "
             "Rebuild the image with 'cauldron up --build'."
@@ -87,20 +87,20 @@ def ensure_container_ssh(container):
 
     pubkey = read_public_key()
 
-    if not podman.exec_with_stdin(
+    if not backend.active().exec_with_stdin(
         container,
         [
             "sh",
             "-c",
-            f"mkdir -p {_CONTAINER_HOME}/.ssh"
-            f" && cat > {_CONTAINER_HOME}/.ssh/authorized_keys"
-            f" && chmod 600 {_CONTAINER_HOME}/.ssh/authorized_keys",
+            f"mkdir -p {home}/.ssh"
+            f" && cat > {home}/.ssh/authorized_keys"
+            f" && chmod 600 {home}/.ssh/authorized_keys",
         ],
         pubkey,
     ):
         raise SSHError("Failed to install authorized_keys in container.")
 
-    if not podman.exec_check(container, ["ssh-keygen", "-A"], user="0"):
+    if not backend.active().exec_check(container, ["ssh-keygen", "-A"], user="0"):
         raise SSHError("Failed to generate SSH host keys in container.")
 
 
@@ -113,9 +113,7 @@ def _build_host_block(container):
         "    IdentitiesOnly yes\n"
         "    StrictHostKeyChecking no\n"
         "    UserKnownHostsFile /dev/null\n"
-        f"    ProxyCommand {shlex.quote(podman._podman_bin())} exec -u 0 -i {container}"
-        " /usr/sbin/sshd -i"
-        " -o UsePAM=no -o PasswordAuthentication=no\n"
+        f"    ProxyCommand {backend.active().ssh_proxy_command(container)}\n"
     )
 
 
@@ -135,6 +133,22 @@ def ensure_ssh_config(container):
     SSH_CONFIG.chmod(0o600)
 
     _ensure_include_in_user_config()
+
+
+def ensure_remote_ssh(container):
+    """Set up Remote-SSH for a container: host key pair, in-container sshd, and
+    the SSH config. Idempotent. Raises SSHError if any step fails.
+
+    Filesystem failures (key-directory creation, config reads/writes) are
+    normalised to ``SSHError`` so callers can treat every setup failure
+    uniformly instead of a raw ``OSError`` surfacing.
+    """
+    try:
+        ensure_keypair()
+        ensure_container_ssh(container)
+        ensure_ssh_config(container)
+    except OSError as exc:
+        raise SSHError(f"SSH setup failed: {exc}") from exc
 
 
 def _update_managed_file(path, begin_marker, end_marker, content):
